@@ -15,6 +15,7 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(project_root))
 
 from core import Order, Trade, OrderType, Side, CancelEvent, Orderbook
+from core.config import VALIDATE_ORDERS
 from simulation.agents import AgentContext, BaseAgent, generate_agent_orders
 from simulation.stochastic import evolve_mid_price
 
@@ -30,7 +31,7 @@ def stream_fake_market(
     cancel_ratio: float = 0.3,
     orders_per_tick: int = 10,
     replenish: bool = True,
-    validate_orders: bool = False,
+    validate_orders: bool = VALIDATE_ORDERS,
     agents: list[BaseAgent] | None = None,
 ) -> Iterator[tuple[Order | CancelEvent, list[Trade]]]:
     """

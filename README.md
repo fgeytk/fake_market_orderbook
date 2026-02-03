@@ -9,17 +9,29 @@ IA/
 ├── core/                      # Core orderbook engine
 │   ├── __init__.py
 │   ├── config.py             # Configuration constants (TICK_SIZE, DEBUG)
+│   ├── logging_config.py     # Logging configuration
 │   ├── models.py             # Data models (Order, Trade, CancelEvent, Side, OrderType)
 │   └── orderbook.py          # Orderbook class with matching engine
 │
 ├── simulation/               # Market simulation
 │   ├── __init__.py
+│   ├── agents.py             # Agent behaviors
 │   └── market_stream.py      # Realistic market data generator
+│   └── stochastic.py         # Mid-price evolution
 │
 ├── visualization/            # Interactive UI
 │   ├── __init__.py
 │   └── orderbook_viz.py      # Dash/Plotly real-time visualization
 │
+├── tests/                     # Pytest suite
+│   ├── conftest.py
+│   ├── test_agents.py
+│   ├── test_integration_market_stream.py
+│   ├── test_invariants_property.py
+│   ├── test_models.py
+│   └── test_orderbook.py
+│
+├── cli.py                     # Typer CLI commands (viz/stream/profile)
 ├── main.py                   # Entry point
 ├── requirements.txt          # Python dependencies
 └── README.md                 # This file
@@ -43,15 +55,21 @@ pip install -r requirements.txt
 ### Run Visualization Server
 
 ```bash
-python main.py
+python main.py viz
 ```
 
 Then open http://127.0.0.1:8050 in your browser.
 
-### Run Simple Test
+### Run a Short Stream
 
 ```bash
-python main.py test
+python main.py stream --steps 20
+```
+
+### CLI Help
+
+```bash
+python main.py --help
 ```
 
 ### Tests (pytest)
@@ -93,6 +111,12 @@ for event, trades in stream_fake_market(book):
 Edit [core/config.py](core/config.py) to change:
 - `TICK_SIZE`: Price discretization (default: 0.01)
 - `DEBUG`: Enable invariant checks (default: False)
+- `VALIDATE_ORDERS`: Validate orders on creation (default: False)
+
+Other runtime parameters are CLI options:
+- `main.py viz --host --port`
+- `main.py stream --steps --sleep-sec`
+- `main.py profile --steps --sleep-sec`
 
 ## Architecture
 
@@ -107,7 +131,8 @@ Orderbook.add_order()
     ↓ produces
    Trades
     ↓ consumed by
-orderbook_viz.py
+cli.py stream (prints)
+orderbook_viz.py (visualization)
 ```
 
 ### Simple(dumb) Orderbook

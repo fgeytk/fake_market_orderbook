@@ -8,6 +8,7 @@ import random
 from typing import Iterable
 
 from core import Order, OrderType, Side, Orderbook
+from core.config import VALIDATE_ORDERS
 from simulation.stochastic import evolve_mid_price
 
 
@@ -32,7 +33,7 @@ class BaseAgent:
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = False,
+        validate_orders: bool = VALIDATE_ORDERS,
     ) -> tuple[list[Order], int]:
         return [], next_id
 
@@ -49,7 +50,7 @@ class MarketMaker(BaseAgent):
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = False,
+        validate_orders: bool = VALIDATE_ORDERS,
     ) -> tuple[list[Order], int]:
         bid_tick = max(1, ctx.mid_tick - self.spread_ticks)
         ask_tick = ctx.mid_tick + self.spread_ticks
@@ -89,7 +90,7 @@ class MomentumTrader(BaseAgent):
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = False,
+        validate_orders: bool = VALIDATE_ORDERS,
     ) -> tuple[list[Order], int]:
         if ctx.momentum > self.threshold:
             side = Side.BID
@@ -123,7 +124,7 @@ class MeanReversionTrader(BaseAgent):
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = False,
+        validate_orders: bool = VALIDATE_ORDERS,
     ) -> tuple[list[Order], int]:
         diff = (ctx.mid_price - self.ref_price) / self.ref_price
         if diff > self.threshold:
@@ -178,7 +179,7 @@ def generate_agent_orders(
     book: Orderbook,
     ctx: AgentContext,
     next_id: int,
-    validate_orders: bool = False,
+    validate_orders: bool = VALIDATE_ORDERS,
 ) -> tuple[list[Order], int]:
     """Aggregate orders from multiple agents."""
     orders: list[Order] = []
