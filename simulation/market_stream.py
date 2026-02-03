@@ -40,6 +40,11 @@ def stream_fake_market(
     - stress: High volatility, wide spread, many market orders
     """
     rng = random.Random(seed)
+    rnd = rng.random
+    gauss = rng.gauss
+    lognorm = rng.lognormvariate
+    expov = rng.expovariate
+    choice = rng.choice
     next_id = 1
     t = 0
     mid_price = start_price
@@ -74,17 +79,17 @@ def stream_fake_market(
     regime = "normal"
 
     while True:
-        if rng.random() < regime_switch_prob:
-            regime = rng.choice(regime_names)
+        if rnd() < regime_switch_prob:
+            regime = choice(regime_names)
 
         params = regimes[regime]
 
         # stochastic volatility random walk with occasional jumps
-        shock = rng.gauss(0.0, params["sigma"])
+        shock = gauss(0.0, params["sigma"])
         momentum = 0.95 * momentum + shock
         jump = 0.0
-        if rng.random() < params["jump_prob"]:
-            jump = rng.gauss(0.0, params["jump_sigma"])
+        if rnd() < params["jump_prob"]:
+            jump = gauss(0.0, params["jump_sigma"])
 
         mid_price *= max(0.01, 1.0 + shock + jump)
         mid_price = max(0.01, mid_price)
@@ -92,22 +97,22 @@ def stream_fake_market(
         for _ in range(max(1, orders_per_tick)):
             side_bias = 0.5 + params["imbalance"] + (0.08 if momentum > 0 else -0.08)
             side_bias = min(max(side_bias, 0.05), 0.95)
-            side = Side.BID if rng.random() < side_bias else Side.ASK
+            side = Side.BID if rnd() < side_bias else Side.ASK
 
             effective_market_ratio = max(
                 0.01, min(0.9, market_ratio * params["market_ratio"] / 0.2)
             )
-            is_market = rng.random() < effective_market_ratio
+            is_market = rnd() < effective_market_ratio
 
             # heavy-tailed order sizes
-            qty = int(max(1, min(500, rng.lognormvariate(2.2, 0.8))))
+            qty = int(max(1, min(500, lognorm(2.2, 0.8))))
 
             # occasional cancellations (observable)
-            if rng.random() < cancel_ratio:
-                cancel_side = Side.BID if rng.random() < 0.5 else Side.ASK
+            if rnd() < cancel_ratio:
+                cancel_side = Side.BID if rnd() < 0.5 else Side.ASK
                 levels = book.bids if cancel_side == Side.BID else book.asks
                 if levels:
-                    price_tick = rng.choice(list(levels.keys()))
+                    price_tick = choice(list(levels.keys()))
                     canceled = book.cancel_at_price(cancel_side, price_tick)
                     if canceled:
                         yield CancelEvent(cancel_side, price_tick, canceled.id), []
@@ -124,15 +129,15 @@ def stream_fake_market(
             else:
                 dynamic_spread = spread * params["spread_mult"]
                 # concentrate liquidity near mid: exponential offset + small jitter
-                base_offset = rng.expovariate(1.0 / max(0.01, dynamic_spread * 0.35))
+                base_offset = expov(1.0 / max(0.01, dynamic_spread * 0.35))
                 offset = dynamic_spread / 2 + base_offset
-                if rng.random() < 0.6:
+                if rnd() < 0.6:
                     offset *= rng.uniform(0.2, 0.6)
 
                 price = mid_price - offset if side == Side.BID else mid_price + offset
 
                 # liquidity clustering around round levels
-                if rng.random() < 0.5:
+                if rnd() < 0.5:
                     price = round(price * 20) / 20  # cluster to 0.05
                 price_tick = book.price_to_tick(max(0.01, price))
                 order = Order(
