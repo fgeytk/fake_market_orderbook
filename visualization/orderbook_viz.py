@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import sys
 import math
+import heapq
+from pathlib import Path
 import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output
 import plotly.graph_objects as go
+
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
 from core import Orderbook
 from simulation import stream_fake_market
@@ -15,15 +23,15 @@ from simulation import stream_fake_market
 def _depth_snapshot(
     book: Orderbook, depth_levels: int = 10
 ) -> tuple[list[int], list[int], list[int], list[int]]:
-    """Extract the top N price levels from bids and asks."""
-    bids = sorted(book.bids.items(), key=lambda x: x[0], reverse=True)[:depth_levels]
-    asks = sorted(book.asks.items(), key=lambda x: x[0])[:depth_levels]
+    """Use heaps for O(1) retrieval of top levels."""
+    bid_levels = heapq.nlargest(depth_levels, book.bid_sizes.items(), key=lambda x: x[0])
+    ask_levels = heapq.nsmallest(depth_levels, book.ask_sizes.items(), key=lambda x: x[0])
 
-    bid_prices = [p for p, _ in bids]
-    bid_sizes = [sum(o.quantity for o in q) for _, q in bids]
+    bid_prices = [p for p, _ in bid_levels]
+    bid_sizes = [size for _, size in bid_levels]
 
-    ask_prices = [p for p, _ in asks]
-    ask_sizes = [sum(o.quantity for o in q) for _, q in asks]
+    ask_prices = [p for p, _ in ask_levels]
+    ask_sizes = [size for _, size in ask_levels]
 
     return bid_prices, bid_sizes, ask_prices, ask_sizes
 
@@ -48,9 +56,7 @@ def _build_figure(book: Orderbook, depth_levels: int = 10) -> go.Figure:
                 orientation="h",
                 name="BID",
                 marker_color="#2ecc71",
-                hovertemplate="Price: %{y:.2f}<br>Size: " + 
-                              "<br>".join([f"{bid_sizes[i]}" for i in range(len(bid_sizes))]) +
-                              "<extra></extra>",
+                hovertemplate="Price: %{y:.2f}<br>Size (log): %{x:.2f}<extra></extra>",
             )
         )
     # Asks on the left (negative x)
@@ -62,9 +68,7 @@ def _build_figure(book: Orderbook, depth_levels: int = 10) -> go.Figure:
                 orientation="h",
                 name="ASK",
                 marker_color="#e74c3c",
-                hovertemplate="Price: %{y:.2f}<br>Size: " + 
-                              "<br>".join([f"{ask_sizes[i]}" for i in range(len(ask_sizes))]) +
-                              "<extra></extra>",
+                hovertemplate="Price: %{y:.2f}<br>Size (log): %{x:.2f}<extra></extra>",
             )
         )
 

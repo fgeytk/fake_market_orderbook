@@ -22,6 +22,8 @@ class Orderbook:
     debug: bool = DEBUG
     bids: dict[int, Deque[Order]] = field(default_factory=dict)  # price_tick -> FIFO queue
     asks: dict[int, Deque[Order]] = field(default_factory=dict)
+    bid_sizes: dict[int, int] = field(default_factory=dict)  # price_tick -> total quantity
+    ask_sizes: dict[int, int] = field(default_factory=dict)
     bid_heap: list[int] = field(default_factory=list)  # store -price_tick
     ask_heap: list[int] = field(default_factory=list)  # store +price_tick
     order_index: dict[int, tuple[Side, int]] = field(default_factory=dict)  # id -> (side, price_tick)
@@ -61,8 +63,7 @@ class Orderbook:
         if not self.bid_heap:
             return None
         price_tick = -self.bid_heap[0]
-        qty = sum(o.quantity for o in self.bids[price_tick])
-        return price_tick, qty
+        return price_tick, self.bid_sizes.get(price_tick, 0)
 
     def best_ask(self) -> tuple[int, int] | None:
         """Return (price_tick, total_quantity) for the best ask, or None."""
@@ -70,8 +71,7 @@ class Orderbook:
         if not self.ask_heap:
             return None
         price_tick = self.ask_heap[0]
-        qty = sum(o.quantity for o in self.asks[price_tick])
-        return price_tick, qty
+        return price_tick, self.ask_sizes.get(price_tick, 0)
 
     def _assert_invariants(self) -> None:
         """Check orderbook invariants (no crossed book, heap sync)."""
@@ -103,13 +103,17 @@ class Orderbook:
         if order.side == Side.BID:
             if price_tick not in self.bids:
                 self.bids[price_tick] = deque()
+                self.bid_sizes[price_tick] = 0
                 heapq.heappush(self.bid_heap, -price_tick)
             self.bids[price_tick].append(order)
+            self.bid_sizes[price_tick] += order.quantity
         else:
             if price_tick not in self.asks:
                 self.asks[price_tick] = deque()
+                self.ask_sizes[price_tick] = 0
                 heapq.heappush(self.ask_heap, price_tick)
             self.asks[price_tick].append(order)
+            self.ask_sizes[price_tick] += order.quantity
 
         self.order_index[order.id] = (order.side, price_tick)
         self._assert_invariants()
@@ -131,11 +135,13 @@ class Orderbook:
             book_side = Side.ASK
             heap = self.ask_heap
             levels = self.asks
+            sizes = self.ask_sizes
             price_sign = 1
         else:
             book_side = Side.BID
             heap = self.bid_heap
             levels = self.bids
+            sizes = self.bid_sizes
             price_sign = -1
 
         while remaining_qty > 0:
@@ -159,6 +165,7 @@ class Orderbook:
 
                 remaining_qty -= trade_qty
                 top_order.quantity -= trade_qty
+                sizes[best_tick] -= trade_qty
 
                 if top_order.quantity == 0:
                     queue.popleft()
@@ -166,6 +173,7 @@ class Orderbook:
 
             if not queue:
                 del levels[best_tick]
+                sizes.pop(best_tick, None)
 
         self._assert_invariants()
         return trades, remaining_qty
@@ -202,13 +210,16 @@ class Orderbook:
     def cancel_at_price(self, side: Side, price_tick: int) -> Order | None:
         """Cancel the first order at a given price level."""
         levels = self.bids if side == Side.BID else self.asks
+        sizes = self.bid_sizes if side == Side.BID else self.ask_sizes
         queue = levels.get(price_tick)
         if not queue:
             return None
         order = queue.popleft()
+        sizes[price_tick] = max(0, sizes.get(price_tick, 0) - order.quantity)
         self.order_index.pop(order.id, None)
         if not queue:
             del levels[price_tick]
+            sizes.pop(price_tick, None)
         self._assert_invariants()
         return order
 
@@ -219,6 +230,7 @@ class Orderbook:
             return False
         side, price_tick = info
         levels = self.bids if side == Side.BID else self.asks
+        sizes = self.bid_sizes if side == Side.BID else self.ask_sizes
         queue = levels.get(price_tick)
         if not queue:
             self.order_index.pop(order_id, None)
@@ -226,10 +238,12 @@ class Orderbook:
 
         new_queue = deque()
         removed = False
+        removed_qty = 0
         while queue:
             order = queue.popleft()
             if order.id == order_id and not removed:
                 removed = True
+                removed_qty = order.quantity
                 continue
             new_queue.append(order)
 
@@ -237,6 +251,10 @@ class Orderbook:
             levels[price_tick] = new_queue
         else:
             levels.pop(price_tick, None)
+            sizes.pop(price_tick, None)
+
+        if removed_qty:
+            sizes[price_tick] = max(0, sizes.get(price_tick, 0) - removed_qty)
 
         if removed:
             self.order_index.pop(order_id, None)

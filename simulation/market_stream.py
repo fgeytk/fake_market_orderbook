@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import sys
 import time
 import random
 from dataclasses import asdict
+from pathlib import Path
 from typing import Iterator
+
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
 from core import Order, Trade, OrderType, Side, CancelEvent, Orderbook
 
