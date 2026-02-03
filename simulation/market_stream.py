@@ -15,6 +15,8 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(project_root))
 
 from core import Order, Trade, OrderType, Side, CancelEvent, Orderbook
+from simulation.agents import AgentContext, BaseAgent, generate_agent_orders
+from simulation.stochastic import evolve_mid_price
 
 
 def stream_fake_market(
@@ -29,6 +31,7 @@ def stream_fake_market(
     orders_per_tick: int = 10,
     replenish: bool = True,
     validate_orders: bool = False,
+    agents: list[BaseAgent] | None = None,
 ) -> Iterator[tuple[Order | CancelEvent, list[Trade]]]:
     """
     Generate a realistic stream of market events with regime switching.
@@ -98,14 +101,32 @@ def stream_fake_market(
         imbalance = params["imbalance"]
 
         # stochastic volatility random walk with occasional jumps
-        shock = gauss(0.0, sigma)
-        momentum = 0.95 * momentum + shock
-        jump = 0.0
-        if rnd() < jump_prob:
-            jump = gauss(0.0, jump_sigma)
+        mid_price, momentum, regime = evolve_mid_price(
+            rng,
+            mid_price,
+            momentum,
+            regimes,
+            regime,
+            regime_switch_prob=regime_switch_prob,
+        )
 
-        mid_price *= max(0.01, 1.0 + shock + jump)
-        mid_price = max(0.01, mid_price)
+        # agent orders (optional)
+        if agents:
+            mid_tick = book.price_to_tick(mid_price)
+            ctx = AgentContext(
+                t=t,
+                mid_price=mid_price,
+                mid_tick=mid_tick,
+                best_bid=book.best_bid(),
+                best_ask=book.best_ask(),
+                momentum=momentum,
+            )
+            agent_orders, next_id = generate_agent_orders(
+                agents, book, ctx, next_id, validate_orders=validate_orders
+            )
+            for order in agent_orders:
+                trades = book.add_order(order)
+                yield order, trades
 
         for _ in range(max(1, orders_per_tick)):
             side_bias = 0.5 + imbalance + (0.08 if momentum > 0 else -0.08)

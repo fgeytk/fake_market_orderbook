@@ -17,7 +17,7 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(project_root))
 
 from core import Orderbook
-from simulation import stream_fake_market_batch
+from simulation import stream_fake_market_batch, MarketMaker, MomentumTrader, MeanReversionTrader, NoiseTrader
 
 
 def _depth_snapshot(
@@ -113,11 +113,18 @@ def create_app() -> dash.Dash:
     app = dash.Dash(__name__)
 
     book = Orderbook()
+    agents = [
+        MarketMaker(),
+        MomentumTrader(),
+        MeanReversionTrader(ref_price=10.0),
+        NoiseTrader(),
+    ]
     generator = stream_fake_market_batch(
         book,
         batch_size=50,
         sleep_sec=0.0,
         validate_orders=False,
+        agents=agents,
     )
 
     app.layout = html.Div(

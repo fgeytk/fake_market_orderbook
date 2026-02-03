@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
+import random
 from typing import Iterable
 
 from core import Order, OrderType, Side, Orderbook
+from simulation.stochastic import evolve_mid_price
 
 
 @dataclass(slots=True)
@@ -30,7 +32,7 @@ class BaseAgent:
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = True,
+        validate_orders: bool = False,
     ) -> tuple[list[Order], int]:
         return [], next_id
 
@@ -47,7 +49,7 @@ class MarketMaker(BaseAgent):
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = True,
+        validate_orders: bool = False,
     ) -> tuple[list[Order], int]:
         bid_tick = max(1, ctx.mid_tick - self.spread_ticks)
         ask_tick = ctx.mid_tick + self.spread_ticks
@@ -87,7 +89,7 @@ class MomentumTrader(BaseAgent):
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = True,
+        validate_orders: bool = False,
     ) -> tuple[list[Order], int]:
         if ctx.momentum > self.threshold:
             side = Side.BID
@@ -121,7 +123,7 @@ class MeanReversionTrader(BaseAgent):
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = True,
+        validate_orders: bool = False,
     ) -> tuple[list[Order], int]:
         diff = (ctx.mid_price - self.ref_price) / self.ref_price
         if diff > self.threshold:
@@ -155,7 +157,7 @@ class NoiseTrader(BaseAgent):
         book: Orderbook,
         ctx: AgentContext,
         next_id: int,
-        validate_orders: bool = True,
+        validate_orders: bool = False,
     ) -> tuple[list[Order], int]:
         side = Side.BID if (next_id % 2 == 0) else Side.ASK
         tick = ctx.mid_tick - self.spread_ticks if side == Side.BID else ctx.mid_tick + self.spread_ticks
@@ -176,7 +178,7 @@ def generate_agent_orders(
     book: Orderbook,
     ctx: AgentContext,
     next_id: int,
-    validate_orders: bool = True,
+    validate_orders: bool = False,
 ) -> tuple[list[Order], int]:
     """Aggregate orders from multiple agents."""
     orders: list[Order] = []
@@ -204,9 +206,37 @@ def main() -> None:
     next_id = 1
     mid_price = 10.0
     momentum = 0.0
+    rng = random.Random(42)
+    regimes = {
+        "calm": {
+            "sigma": 0.003,
+            "jump_prob": 0.001,
+            "jump_sigma": 0.02,
+        },
+        "normal": {
+            "sigma": 0.01,
+            "jump_prob": 0.003,
+            "jump_sigma": 0.05,
+        },
+        "stress": {
+            "sigma": 0.03,
+            "jump_prob": 0.01,
+            "jump_sigma": 0.12,
+        },
+    }
+    regime = "normal"
 
     t = 0
     while True:
+        mid_price, momentum, regime = evolve_mid_price(
+            rng,
+            mid_price,
+            momentum,
+            regimes,
+            regime,
+            regime_switch_prob=0.01,
+        )
+
         mid_tick = book.price_to_tick(mid_price)
         ctx = AgentContext(
             t=t,
@@ -225,9 +255,6 @@ def main() -> None:
             for tr in trades:
                 print(f"   Trade: {tr}")
 
-        # tiny drift for momentum signal
-        momentum = 0.9 * momentum + 0.001
-        mid_price = max(0.01, mid_price * (1.0 + 0.001))
         t += 1
         
 
