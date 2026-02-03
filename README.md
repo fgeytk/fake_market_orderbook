@@ -27,34 +27,7 @@ IA/
 
 ## Features
 
-### Core Orderbook Engine
-- **Tick-based pricing**: Avoids floating-point precision issues
-- **Price-time priority**: FIFO matching within price levels
-- **Heap-based structure**: O(1) best price retrieval
-- **Order types**: LIMIT and MARKET orders
-- **Cancellation APIs**: Cancel by price level or order ID
-- **Invariant checks**: Optional debug mode with assertion checks
-
-### Market Simulation
-- **Regime switching**: Calm, normal, and stress market conditions
-- **Realistic dynamics**:
-  - Stochastic volatility with occasional price jumps
-  - Momentum and mean reversion
-  - Heavy-tailed order size distribution (lognormal)
-  - Concentrated liquidity near mid price (exponential)
-  - Order clustering at round price levels
-- **Observable events**: All orders, cancellations, and trades are visible
-- **Automatic replenishment**: Keeps book near mid price
-
-### Visualization
-- **Real-time updates**: 250ms refresh rate
-- **Log compression**: Handles extreme order sizes
-- **Centered display**: Bids on right, asks on left
-- **Symmetric axis**: Stable chart with no erratic jumps
-- **Interactive**: Zoom, pan, hover for details
-
-## Installation
-
+### Core Orderbook Dummy
 ```bash
 # Create virtual environment
 python -m venv .venv
@@ -123,43 +96,7 @@ Orderbook.add_order()
 orderbook_viz.py
 ```
 
-### Key Classes
-
-- **Order**: Represents a limit or market order
-- **Trade**: Represents an executed trade
-- **CancelEvent**: Represents an order cancellation
-- **Orderbook**: The core matching engine
-- **Side**: BID or ASK enum
-- **OrderType**: LIMIT or MARKET enum
-
-### Matching Algorithm
-
-1. **LIMIT orders**: Match aggressively up to limit price, then post remainder
-2. **MARKET orders**: Match completely or are lost (no partial fills posted)
-3. **Price-time priority**: Within each price level, FIFO ordering
-4. **No self-matching**: (future enhancement)
-
-## Future Enhancements
-
-- **Trading Agents** (simulation/agents.py):
-  - Market makers
-  - Momentum traders
-  - Mean reversion traders
-  - Arbitrageurs
-  - Noise traders
-
-- **Position Tracking**:
-  - P&L calculation
-  - Risk metrics
-  - Capital constraints
-
-- **Advanced Features**:
-  - Self-trade prevention
-  - Order modification (cancel-replace)
-  - Iceberg orders
-  - Stop orders
-
-## Development
+### Simple(dumb) Orderbook
 
 ### Old Files (Backup)
 The original monolithic files have been renamed:
