@@ -17,13 +17,13 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(project_root))
 
 from core import Orderbook
-from simulation import stream_fake_market
+from simulation import stream_fake_market_batch
 
 
 def _depth_snapshot(
     book: Orderbook, depth_levels: int = 10
 ) -> tuple[list[int], list[int], list[int], list[int]]:
-    """Use heaps for O(1) retrieval of top levels."""
+    """heaps for O(1) retrieval of top depth levels."""
     bid_levels = heapq.nlargest(depth_levels, book.bid_sizes.items(), key=lambda x: x[0])
     ask_levels = heapq.nsmallest(depth_levels, book.ask_sizes.items(), key=lambda x: x[0])
 
@@ -113,7 +113,12 @@ def create_app() -> dash.Dash:
     app = dash.Dash(__name__)
 
     book = Orderbook()
-    generator = stream_fake_market(book, sleep_sec=0.0)
+    generator = stream_fake_market_batch(
+        book,
+        batch_size=50,
+        sleep_sec=0.0,
+        validate_orders=False,
+    )
 
     app.layout = html.Div(
         style={"padding": "12px"},
@@ -127,8 +132,9 @@ def create_app() -> dash.Dash:
     @app.callback(Output("orderbook-graph", "figure"), Input("tick", "n_intervals"))
     def update_graph(_: int) -> go.Figure:
         """Update the orderbook graph at each interval."""
-        for _ in range(5):
-            next(generator)
+        batch = next(generator)
+        # Consume the batch (orders already applied in the generator)
+        _ = batch
         return _build_figure(book)
 
     return app

@@ -28,6 +28,7 @@ def stream_fake_market(
     cancel_ratio: float = 0.3,
     orders_per_tick: int = 10,
     replenish: bool = True,
+    validate_orders: bool = False,
 ) -> Iterator[tuple[Order | CancelEvent, list[Trade]]]:
     """
     Generate a realistic stream of market events with regime switching.
@@ -38,6 +39,7 @@ def stream_fake_market(
     - calm: Low volatility, tight spread, few market orders
     - normal: Medium volatility, normal spread
     - stress: High volatility, wide spread, many market orders
+    validate_orders=False skips Order validation for higher throughput.
     """
     rng = random.Random(seed)
     rnd = rng.random
@@ -150,6 +152,7 @@ def stream_fake_market(
                     quantity=qty,
                     price_tick=None,
                     timestamp=t,
+                    validate=validate_orders,
                 )
             else:
                 dynamic_spread = spread * spread_mult
@@ -172,6 +175,7 @@ def stream_fake_market(
                     quantity=qty,
                     price_tick=price_tick,
                     timestamp=t,
+                    validate=validate_orders,
                 )
 
                 # keep top of book close to mid by adding a replenishing order
@@ -188,6 +192,7 @@ def stream_fake_market(
                             quantity=max(1, qty // 2),
                             price_tick=max(1, mid_tick - max(1, int(round(dynamic_spread / (2 * book.tick_size))))),
                             timestamp=t,
+                            validate=validate_orders,
                         )
                         repl_trades = book.add_order(repl)
                         yield repl, repl_trades
@@ -199,6 +204,7 @@ def stream_fake_market(
                             quantity=max(1, qty // 2),
                             price_tick=mid_tick + max(1, int(round(dynamic_spread / (2 * book.tick_size)))),
                             timestamp=t,
+                            validate=validate_orders,
                         )
                         repl_trades = book.add_order(repl)
                         yield repl, repl_trades
@@ -211,6 +217,20 @@ def stream_fake_market(
 
         if sleep_sec > 0:
             time.sleep(sleep_sec)
+
+
+def stream_fake_market_batch(
+    book: Orderbook,
+    batch_size: int = 100,
+    **kwargs,
+) -> Iterator[list[tuple[Order | CancelEvent, list[Trade]]]]:
+    """Yield market events in batches for higher throughput."""
+    generator = stream_fake_market(book, **kwargs)
+    while True:
+        batch: list[tuple[Order | CancelEvent, list[Trade]]] = []
+        for _ in range(batch_size):
+            batch.append(next(generator))
+        yield batch
 
 
 def main() -> None:

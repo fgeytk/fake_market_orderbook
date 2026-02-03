@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -28,8 +28,11 @@ class Order:
     quantity: int
     price_tick: Optional[int] = None
     timestamp: int = 0
+    validate: bool = field(default=True, repr=False)
 
     def __post_init__(self) -> None:
+        if not self.validate:
+            return
         if not isinstance(self.id, int) or self.id < 0:
             raise ValueError("id must be a non-negative integer")
 
