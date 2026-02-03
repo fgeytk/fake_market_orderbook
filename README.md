@@ -54,6 +54,20 @@ Then open http://127.0.0.1:8050 in your browser.
 python main.py test
 ```
 
+### Tests (pytest)
+
+```bash
+# Run all tests
+python -m pytest -q
+
+# Run a single test file
+python -m pytest tests/test_orderbook.py -q
+```
+
+Notes:
+- Les tests unitaires sont dans tests/.
+- Hypothesis est utilisé pour les tests d'invariants (test_invariants_property.py).
+
 ### Use as Library
 
 ```python

@@ -52,5 +52,10 @@ def test_orderbook_invariants_under_random_flow(order_sequence: list[tuple[Side,
         for levels in (book.bids, book.asks):
             for q in levels.values():
                 assert isinstance(q, deque)
+                ids = []
                 for o in q:
                     assert o.quantity > 0
+                    assert o.type == OrderType.LIMIT
+                    assert o.price_tick is not None
+                    ids.append(o.id)
+                assert ids == sorted(ids)

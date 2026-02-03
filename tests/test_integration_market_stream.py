@@ -40,7 +40,7 @@ def test_market_stream_integration_sane_metrics():
 
     if spreads:
         avg_spread = sum(spreads) / len(spreads)
-        assert 0 < avg_spread < 10_000
+        assert 0 < avg_spread < 1_000
 
     assert total_depth > 0
 
