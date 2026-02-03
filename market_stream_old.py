@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import time
 import random
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Iterator
 
 from main import Order, OrderType, Side, Trade, Orderbook
+
+
+@dataclass(slots=True)
+class CancelEvent:
+    side: Side
+    price_tick: int
+    order_id: int | None
 
 
 def stream_fake_market(
@@ -16,15 +23,15 @@ def stream_fake_market(
     market_ratio: float = 0.2,
     sleep_sec: float = 0.1,
     regime_switch_prob: float = 0.01,
-    cancel_ratio: float = 0.15,
-    orders_per_tick: int = 100,
-) -> Iterator[tuple[Order, list[Trade]]]:
+    cancel_ratio: float = 0.3,
+    orders_per_tick: int = 10,
+    replenish: bool = True,
+) -> Iterator[tuple[Order | CancelEvent, list[Trade]]]:
     rng = random.Random(seed)
     next_id = 1
     t = 0
     mid_price = start_price
     momentum = 0.0
-
     regimes = {
         "calm": {
             "sigma": 0.003,
@@ -83,22 +90,15 @@ def stream_fake_market(
             # heavy-tailed order sizes
             qty = int(max(1, min(500, rng.lognormvariate(2.2, 0.8))))
 
-            # occasional cancellations to avoid book drift/overfill
+            # occasional cancellations (observable)
             if rng.random() < cancel_ratio:
-                if book.bids and rng.random() < 0.5:
-                    price = rng.choice(list(book.bids.keys()))
-                    q = book.bids.get(price)
-                    if q:
-                        q.popleft()
-                        if not q:
-                            del book.bids[price]
-                elif book.asks:
-                    price = rng.choice(list(book.asks.keys()))
-                    q = book.asks.get(price)
-                    if q:
-                        q.popleft()
-                        if not q:
-                            del book.asks[price]
+                cancel_side = Side.BID if rng.random() < 0.5 else Side.ASK
+                levels = book.bids if cancel_side == Side.BID else book.asks
+                if levels:
+                    price_tick = rng.choice(list(levels.keys()))
+                    canceled = book.cancel_at_price(cancel_side, price_tick)
+                    if canceled:
+                        yield CancelEvent(cancel_side, price_tick, canceled.id), []
 
             if is_market:
                 order = Order(
@@ -106,7 +106,7 @@ def stream_fake_market(
                     side=side,
                     type=OrderType.MARKET,
                     quantity=qty,
-                    price=None,
+                    price_tick=None,
                     timestamp=t,
                 )
             else:
@@ -122,41 +122,44 @@ def stream_fake_market(
                 # liquidity clustering around round levels
                 if rng.random() < 0.5:
                     price = round(price * 20) / 20  # cluster to 0.05
+                price_tick = book.price_to_tick(max(0.01, price))
                 order = Order(
                     id=next_id,
                     side=side,
                     type=OrderType.LIMIT,
                     quantity=qty,
-                    price=round(max(0.01, price), 2),
+                    price_tick=price_tick,
                     timestamp=t,
                 )
 
                 # keep top of book close to mid by adding a replenishing order
-                best_bid = book.best_bid()
-                best_ask = book.best_ask()
-                max_gap = dynamic_spread * 2.5
-                if best_bid and abs(mid_price - best_bid[0]) > max_gap:
-                    book.add_order(
-                        Order(
+                if replenish:
+                    best_bid = book.best_bid()
+                    best_ask = book.best_ask()
+                    mid_tick = book.price_to_tick(mid_price)
+                    max_gap_ticks = max(1, int(round((dynamic_spread * 2.5) / book.tick_size)))
+                    if best_bid and abs(mid_tick - best_bid[0]) > max_gap_ticks:
+                        repl = Order(
                             id=next_id + 10_000_000,
                             side=Side.BID,
                             type=OrderType.LIMIT,
                             quantity=max(1, qty // 2),
-                            price=round(max(0.01, mid_price - dynamic_spread / 2), 2),
+                            price_tick=max(1, mid_tick - max(1, int(round(dynamic_spread / (2 * book.tick_size))))),
                             timestamp=t,
                         )
-                    )
-                if best_ask and abs(best_ask[0] - mid_price) > max_gap:
-                    book.add_order(
-                        Order(
+                        repl_trades = book.add_order(repl)
+                        yield repl, repl_trades
+                    if best_ask and abs(best_ask[0] - mid_tick) > max_gap_ticks:
+                        repl = Order(
                             id=next_id + 20_000_000,
                             side=Side.ASK,
                             type=OrderType.LIMIT,
                             quantity=max(1, qty // 2),
-                            price=round(max(0.01, mid_price + dynamic_spread / 2), 2),
+                            price_tick=mid_tick + max(1, int(round(dynamic_spread / (2 * book.tick_size)))),
                             timestamp=t,
                         )
-                    )
+                        repl_trades = book.add_order(repl)
+                        yield repl, repl_trades
 
             next_id += 1
             t += 1
@@ -172,7 +175,7 @@ def main() -> None:
     book = Orderbook()
 
     for order, trades in stream_fake_market(book):
-        print("ORDER:", asdict(order))
+        print("EVENT:", asdict(order))
         for tr in trades:
             print("TRADE:", asdict(tr))
 
