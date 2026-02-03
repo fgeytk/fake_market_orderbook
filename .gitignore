@@ -17,6 +17,7 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
+.hypothesis/
 
 # Logs
 *.log
@@ -27,4 +28,4 @@ htmlcov/
 
 # OS
 .DS_Store
-Thumbs.db
+Thumbs.db*
