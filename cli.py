@@ -73,11 +73,13 @@ def profile(
 def ws(
     host: str = typer.Option("127.0.0.1", help="Host to bind"),
     port: int = typer.Option(8000, help="Port to bind"),
+    fps: int = typer.Option(60, help="Target frames per second"),
+    batch_size: int = typer.Option(200, help="Orders per batch"),
 ) -> None:
     """Launch the WebSocket server for real-time orderbook data."""
     from uvicorn import Config, Server
 
-    app_ws = create_ws_app()
+    app_ws = create_ws_app(target_fps=fps, batch_size=batch_size)
     config = Config(app_ws, host=host, port=port, log_level="info")
     server = Server(config)
     print(f"Starting WebSocket server on ws://{host}:{port}")

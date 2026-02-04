@@ -26,7 +26,7 @@ def stream_fake_market(
     spread: float = 0.5,
     seed: int = 42,
     market_ratio: float = 0.2,
-    sleep_sec: float = 0.1,
+    sleep_sec: float = 0.5,
     regime_switch_prob: float = 0.01,
     cancel_ratio: float = 0.05,
     orders_per_tick: int = 10,

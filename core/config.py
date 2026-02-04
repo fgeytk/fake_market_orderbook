@@ -4,7 +4,7 @@
 TICK_SIZE = 0.01
 
 # Debug mode (enables invariant checks)
-DEBUG = False
+DEBUG = True
 
 # Validate order inputs (safety vs performance)
-VALIDATE_ORDERS = False
+VALIDATE_ORDERS = True

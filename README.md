@@ -9,7 +9,6 @@ IA/
 ├── core/                      # Core orderbook engine
 │   ├── __init__.py
 │   ├── config.py             # Configuration constants (TICK_SIZE, DEBUG)
-│   ├── logging_config.py     # Logging configuration
 │   ├── models.py             # Data models (Order, Trade, CancelEvent, Side, OrderType)
 │   └── orderbook.py          # Orderbook class with matching engine
 │
@@ -60,6 +59,12 @@ python main.py ws --host 127.0.0.1 --port 8000
 ```
 
 Then open http://127.0.0.1:8000/ui in your browser.
+
+Adjust streaming speed:
+
+```bash
+python main.py ws --fps 30 --batch-size 100
+```
 
 ### Run a Short Stream
 
