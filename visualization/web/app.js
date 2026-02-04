@@ -58,7 +58,8 @@ function drawDepth(snapshot) {
     ctx.fillRect(midX - barWidth, y, barWidth - 2, barHeight - 2);
 
     ctx.fillStyle = "#c7d2e0";
-    ctx.fillText(price.toFixed(2), midX - barWidth - 64, y + barHeight * 0.7);
+    ctx.fillText(`$${price.toFixed(2)}`, midX - barWidth - 72, y + barHeight * 0.7);
+    ctx.fillText(`${size}`, midX - barWidth - 16, y + barHeight * 0.7);
   });
 
   asks.forEach((level, idx) => {
@@ -70,7 +71,8 @@ function drawDepth(snapshot) {
     ctx.fillRect(midX + 2, y, barWidth, barHeight - 2);
 
     ctx.fillStyle = "#c7d2e0";
-    ctx.fillText(price.toFixed(2), midX + barWidth + 8, y + barHeight * 0.7);
+    ctx.fillText(`$${price.toFixed(2)}`, midX + barWidth + 8, y + barHeight * 0.7);
+    ctx.fillText(`${size}`, midX + barWidth + 72, y + barHeight * 0.7);
   });
 }
 
@@ -95,8 +97,19 @@ function updateStats(snapshot) {
 
   const bestBid = snapshot.bids?.[0];
   const bestAsk = snapshot.asks?.[0];
-  bestBidEl.textContent = bestBid ? `${bestBid[0].toFixed(2)} × ${bestBid[1]}` : "—";
-  bestAskEl.textContent = bestAsk ? `${bestAsk[0].toFixed(2)} × ${bestAsk[1]}` : "—";
+  if (bestBid) {
+    const notionalBid = bestBid[0] * bestBid[1];
+    bestBidEl.textContent = `$${bestBid[0].toFixed(2)} × ${bestBid[1]} = $${notionalBid.toFixed(2)}`;
+  } else {
+    bestBidEl.textContent = "—";
+  }
+
+  if (bestAsk) {
+    const notionalAsk = bestAsk[0] * bestAsk[1];
+    bestAskEl.textContent = `$${bestAsk[0].toFixed(2)} × ${bestAsk[1]} = $${notionalAsk.toFixed(2)}`;
+  } else {
+    bestAskEl.textContent = "—";
+  }
 }
 
 function renderLoop() {

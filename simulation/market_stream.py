@@ -28,9 +28,11 @@ def stream_fake_market(
     market_ratio: float = 0.2,
     sleep_sec: float = 0.1,
     regime_switch_prob: float = 0.01,
-    cancel_ratio: float = 0.3,
+    cancel_ratio: float = 0.05,
     orders_per_tick: int = 10,
     replenish: bool = True,
+    min_price: float = 1.0,
+    mean_reversion: float = 0.002,
     validate_orders: bool = VALIDATE_ORDERS,
     agents: list[BaseAgent] | None = None,
 ) -> Iterator[tuple[Order | CancelEvent, list[Trade]]]:
@@ -54,7 +56,9 @@ def stream_fake_market(
     uniform = rng.uniform
     next_id = 1
     t = 0
-    mid_price = start_price
+    min_price = max(book.tick_size, min_price)
+    min_tick = book.price_to_tick(min_price)
+    mid_price = max(min_price, start_price)
     momentum = 0.0
     regimes = {
         "calm": {
@@ -109,7 +113,12 @@ def stream_fake_market(
             regimes,
             regime,
             regime_switch_prob=regime_switch_prob,
+            anchor_price=start_price,
+            mean_reversion=mean_reversion,
+            min_price=min_price,
         )
+        if mid_price < min_price:
+            mid_price = min_price
 
         # agent orders (optional)
         if agents:
@@ -189,7 +198,7 @@ def stream_fake_market(
                 # liquidity clustering around round levels
                 if rnd() < 0.5:
                     price = round(price * 20) / 20  # cluster to 0.05
-                price_tick = book.price_to_tick(max(0.01, price))
+                price_tick = max(min_tick, book.price_to_tick(max(min_price, price)))
                 order = Order(
                     id=next_id,
                     side=side,
@@ -212,7 +221,7 @@ def stream_fake_market(
                             side=Side.BID,
                             type=OrderType.LIMIT,
                             quantity=max(1, qty // 2),
-                            price_tick=max(1, mid_tick - max(1, int(round(dynamic_spread / (2 * book.tick_size))))),
+                            price_tick=max(min_tick, mid_tick - max(1, int(round(dynamic_spread / (2 * book.tick_size))))),
                             timestamp=t,
                             validate=validate_orders,
                         )
