@@ -12,7 +12,7 @@ import typer
 
 from core import Orderbook
 from simulation import stream_fake_market
-from visualization import create_app
+from visualization.ws_server import create_ws_app
 
 app = typer.Typer(add_completion=False)
 
@@ -28,17 +28,6 @@ def _to_primitive(obj: Any) -> Any:
     if hasattr(obj, "value"):
         return obj.value
     return obj
-
-
-@app.command()
-def viz(
-    host: str = typer.Option("127.0.0.1", help="Host to bind"),
-    port: int = typer.Option(8050, help="Port to bind"),
-) -> None:
-    """Launch the interactive Dash visualization server."""
-    print(f"Starting visualization on http://{host}:{port}")
-    app_dash = create_app()
-    app_dash.run(host=host, port=port, debug=False)
 
 
 @app.command()
@@ -79,6 +68,22 @@ def profile(
     stats.print_stats(25)
 
     print(buf.getvalue())
+
+@app.command()
+def ws(
+    host: str = typer.Option("127.0.0.1", help="Host to bind"),
+    port: int = typer.Option(8000, help="Port to bind"),
+) -> None:
+    """Launch the WebSocket server for real-time orderbook data."""
+    from uvicorn import Config, Server
+
+    app_ws = create_ws_app()
+    config = Config(app_ws, host=host, port=port, log_level="info")
+    server = Server(config)
+    print(f"Starting WebSocket server on ws://{host}:{port}")
+    server.run()
+
+
 
 
 if __name__ == "__main__":

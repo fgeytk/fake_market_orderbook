@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orderbook Live</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">OB</div>
+          <div class="title">
+            <div class="name">Orderbook Live</div>
+            <div class="subtitle">Institutional preview</div>
+          </div>
+        </div>
+        <div class="stats">
+          <div class="stat">
+            <span class="label">Latency</span>
+            <span id="latency" class="value">—</span>
+          </div>
+          <div class="stat">
+            <span class="label">Seq</span>
+            <span id="seq" class="value">—</span>
+          </div>
+          <div class="stat">
+            <span class="label">FPS</span>
+            <span id="fps" class="value">—</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="panel">
+          <div class="panel-header">
+            <span>Depth</span>
+            <div class="panel-actions">
+              <span class="pill">WS: <span id="ws-status">connecting</span></span>
+            </div>
+          </div>
+          <canvas id="depth" width="1200" height="700"></canvas>
+        </section>
+        <aside class="panel tape">
+          <div class="panel-header">
+            <span>Top of Book</span>
+          </div>
+          <div class="book">
+            <div class="row">
+              <span class="label">Best Bid</span>
+              <span id="best-bid" class="value">—</span>
+            </div>
+            <div class="row">
+              <span class="label">Best Ask</span>
+              <span id="best-ask" class="value">—</span>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="https://unpkg.com/msgpack-lite@0.1.26/dist/msgpack.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

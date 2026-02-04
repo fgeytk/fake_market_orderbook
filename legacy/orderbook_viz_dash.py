@@ -1,4 +1,7 @@
-"""Real-time interactive orderbook depth visualization using Dash."""
+"""
+viz_dash = version refactorisée qui utilise 
+core/simulation + agents + batch + caches bid_sizes/ask_sizes (plus rapide et plus propre)
+"""
 
 from __future__ import annotations
 

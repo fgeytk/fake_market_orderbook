@@ -1,3 +1,8 @@
+"""
+viz_old = version monolithique qui dépend de market_stream.py et 
+calcule la profondeur en itérant sur orders (plus lent).
+
+"""
 from __future__ import annotations
 
 import math

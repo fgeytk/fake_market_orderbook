@@ -21,7 +21,8 @@ IA/
 │
 ├── visualization/            # Interactive UI
 │   ├── __init__.py
-│   └── orderbook_viz.py      # Dash/Plotly real-time visualization
+│   ├── ws_server.py          # FastAPI + WebSocket backend
+│   └── web/                  # HTML/CSS/JS front-end
 │
 ├── tests/                     # Pytest suite
 │   ├── conftest.py
@@ -52,13 +53,13 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Run Visualization Server
+### Run Web UI (FastAPI + WebSocket)
 
 ```bash
-python main.py viz
+python main.py ws --host 127.0.0.1 --port 8000
 ```
 
-Then open http://127.0.0.1:8050 in your browser.
+Then open http://127.0.0.1:8000/ui in your browser.
 
 ### Run a Short Stream
 
@@ -114,7 +115,7 @@ Edit [core/config.py](core/config.py) to change:
 - `VALIDATE_ORDERS`: Validate orders on creation (default: False)
 
 Other runtime parameters are CLI options:
-- `main.py viz --host --port`
+- `main.py ws --host --port`
 - `main.py stream --steps --sleep-sec`
 - `main.py profile --steps --sleep-sec`
 
@@ -132,16 +133,17 @@ Orderbook.add_order()
    Trades
     ↓ consumed by
 cli.py stream (prints)
-orderbook_viz.py (visualization)
+FastAPI WS + web UI (visualization)
 ```
 
 ### Simple(dumb) Orderbook
 
 ### Old Files (Backup)
-The original monolithic files have been renamed:
+Legacy files are kept in legacy/:
 - `main_old.py`
 - `market_stream_old.py`
 - `orderbook_viz_old.py`
+- `orderbook_viz_dash.py`
 
 These can be safely deleted once you confirm the new structure works.
 
@@ -150,9 +152,6 @@ These can be safely deleted once you confirm the new structure works.
 ```bash
 # Test market stream
 python -m simulation.market_stream
-
-# Test visualization
-python -m visualization.orderbook_viz
 ```
 
 ## License
