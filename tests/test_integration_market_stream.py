@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from core import Orderbook, Order, Trade, CancelEvent
+from core import Orderbook, L3Add, L3Execute, L3Cancel
 from simulation.market_stream import stream_fake_market
 
 
-def serialize_event(event: Order | CancelEvent, trades: list[Trade]) -> tuple:
-    event_dict = asdict(event)
-    trade_dicts = [asdict(t) for t in trades]
-    return (event.__class__.__name__, event_dict, trade_dicts)
+def serialize_msg(msg: L3Add | L3Execute | L3Cancel) -> tuple:
+    msg_dict = asdict(msg)
+    return (msg.__class__.__name__, msg_dict)
 
 
 def test_market_stream_integration_sane_metrics():
@@ -27,8 +26,8 @@ def test_market_stream_integration_sane_metrics():
     total_depth = 0
 
     for _ in range(1000):
-        event, trades = next(gen)
-        _ = (event, trades)
+        msg = next(gen)
+        _ = msg
 
         best_bid = book.best_bid()
         best_ask = book.best_ask()
@@ -58,8 +57,8 @@ def test_market_stream_deterministic_with_seed():
         )
         out = []
         for _ in range(200):
-            event, trades = next(gen)
-            out.append(serialize_event(event, trades))
+            msg = next(gen)
+            out.append(serialize_msg(msg))
         return out
 
     first = run_once()

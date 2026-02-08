@@ -76,3 +76,40 @@ class CancelEvent:
     side: Side
     price_tick: int
     order_id: int | None
+
+
+# ITCH L3 Messages
+@dataclass(slots=True)
+class L3Add:
+    """ITCH-like Add Order message."""
+    msg_type: str = "ADD"
+    timestamp: float = 0.0
+    order_id: int = 0
+    side: str = ""
+    price_tick: int = 0
+    price: float = 0.0
+    quantity: int = 0
+
+
+@dataclass(slots=True)
+class L3Execute:
+    """ITCH-like Execute Order message."""
+    msg_type: str = "EXECUTE"
+    timestamp: float = 0.0
+    maker_id: int = 0
+    price_tick: int = 0
+    price: float = 0.0
+    quantity: int = 0
+    aggressor_side: str = ""
+
+
+@dataclass(slots=True)
+class L3Cancel:
+    """ITCH-like Cancel Order message."""
+    msg_type: str = "CANCEL"
+    timestamp: float = 0.0
+    order_id: int = 0
+    side: str = ""
+    price_tick: int = 0
+    price: float = 0.0
+    cancelled_quantity: int = 0

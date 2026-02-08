@@ -1,15 +1,14 @@
-"""Binary WebSocket server streaming orderbook depth snapshots."""
+"""WebSocket server streaming ITCH L3 market messages."""
 
 from __future__ import annotations
 
 import asyncio
-import heapq
+import json
 import threading
 import time
-
+from dataclasses import asdict
 from pathlib import Path
 
-import msgpack
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
@@ -23,33 +22,7 @@ from simulation import (
 )
 
 
-def _depth_snapshot(
-    book: Orderbook, depth_levels: int
-) -> tuple[list[tuple[float, int]], list[tuple[float, int]]]:
-    bid_levels = heapq.nlargest(depth_levels, book.bid_sizes.items(), key=lambda x: x[0])
-    ask_levels = heapq.nsmallest(depth_levels, book.ask_sizes.items(), key=lambda x: x[0])
-
-    bids = [(book.tick_to_price(p), int(size)) for p, size in bid_levels]
-    asks = [(book.tick_to_price(p), int(size)) for p, size in ask_levels]
-    return bids, asks
-
-
-def _build_snapshot_payload(book: Orderbook, depth_levels: int, seq: int) -> dict:
-    bids, asks = _depth_snapshot(book, depth_levels)
-    return {
-        "type": "snapshot",
-        "seq": seq,
-        "ts": time.time_ns(),
-        "bids": bids,
-        "asks": asks,
-    }
-
-
-def _pack_snapshot(payload: dict) -> bytes:
-    return msgpack.packb(payload, use_bin_type=True)
-
-
-def _try_put(queue: asyncio.Queue[bytes], data: bytes) -> None:
+def _try_put(queue: asyncio.Queue[str], data: str) -> None:
     try:
         queue.put_nowait(data)
     except asyncio.QueueFull:
@@ -58,11 +31,8 @@ def _try_put(queue: asyncio.Queue[bytes], data: bytes) -> None:
 
 def _producer(
     loop: asyncio.AbstractEventLoop,
-    queue: asyncio.Queue[bytes],
+    queue: asyncio.Queue[str],
     stop_event: threading.Event,
-    snapshot_lock: threading.Lock,
-    last_snapshot: dict | None,
-    depth_levels: int,
     batch_size: int,
     target_fps: int,
 ) -> None:
@@ -83,18 +53,13 @@ def _producer(
 
     interval = 1.0 / max(1, target_fps)
     next_ts = time.perf_counter()
-    seq = 0
 
     while not stop_event.is_set():
-        _ = next(generator)
-        payload = _build_snapshot_payload(book, depth_levels, seq)
-        data = _pack_snapshot(payload)
-        with snapshot_lock:
-            last_snapshot.clear() if last_snapshot is not None else None
-            if last_snapshot is not None:
-                last_snapshot.update(payload)
+        itch_batch = next(generator)
+        # Convert batch to JSON
+        json_batch = [asdict(msg) for msg in itch_batch]
+        data = json.dumps(json_batch)
         loop.call_soon_threadsafe(_try_put, queue, data)
-        seq += 1
 
         next_ts += interval
         sleep_for = next_ts - time.perf_counter()
@@ -103,9 +68,8 @@ def _producer(
 
 
 def create_ws_app(
-    depth_levels: int = 50,
-    batch_size: int = 200,
-    target_fps: int = 60,
+    batch_size: int = 10,
+    target_fps: int = 20,
 ) -> FastAPI:
     app = FastAPI()
 
@@ -114,11 +78,8 @@ def create_ws_app(
         app.mount("/ui", StaticFiles(directory=str(web_dir), html=True), name="ui")
 
     app.state.clients = set()
-    app.state.queue = asyncio.Queue(maxsize=2)
+    app.state.queue = asyncio.Queue(maxsize=10)
     app.state.stop_event = threading.Event()
-    app.state.snapshot_lock = threading.Lock()
-    app.state.last_snapshot = {}
-    app.state.depth_levels = depth_levels
     app.state.batch_size = batch_size
     app.state.target_fps = target_fps
 
@@ -132,9 +93,6 @@ def create_ws_app(
                 app.state.loop,
                 app.state.queue,
                 app.state.stop_event,
-                app.state.snapshot_lock,
-                app.state.last_snapshot,
-                app.state.depth_levels,
                 app.state.batch_size,
                 app.state.target_fps,
             ),
@@ -157,12 +115,7 @@ def create_ws_app(
 
     @app.get("/")
     async def root() -> dict[str, str]:
-        return {"status": "ok", "ui": "/ui", "ws": "/ws"}
-
-    @app.get("/snapshot")
-    async def snapshot() -> dict:
-        with app.state.snapshot_lock:
-            return dict(app.state.last_snapshot)
+        return {"status": "ok", "service": "ITCH L3 Feed", "ws": "/ws"}
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:
@@ -180,7 +133,7 @@ def create_ws_app(
 
 
 async def _broadcast_loop(app: FastAPI) -> None:
-    queue: asyncio.Queue[bytes] = app.state.queue
+    queue: asyncio.Queue[str] = app.state.queue
     while True:
         data = await queue.get()
         if not app.state.clients:
@@ -188,8 +141,12 @@ async def _broadcast_loop(app: FastAPI) -> None:
         dead: list[WebSocket] = []
         for ws in list(app.state.clients):
             try:
-                await ws.send_bytes(data)
+                await ws.send_text(data)
             except Exception:
                 dead.append(ws)
         for ws in dead:
             app.state.clients.discard(ws)
+
+
+# Create global app instance
+app = create_ws_app()

@@ -14,7 +14,7 @@ if __package__ in (None, ""):
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from core import Order, Trade, OrderType, Side, CancelEvent, Orderbook
+from core import Order, Trade, OrderType, Side, CancelEvent, Orderbook, L3Add, L3Execute, L3Cancel
 from core.config import VALIDATE_ORDERS
 from simulation.agents import AgentContext, BaseAgent, generate_agent_orders
 from simulation.stochastic import evolve_mid_price
@@ -35,11 +35,11 @@ def stream_fake_market(
     mean_reversion: float = 0.002,
     validate_orders: bool = VALIDATE_ORDERS,
     agents: list[BaseAgent] | None = None,
-) -> Iterator[tuple[Order | CancelEvent, list[Trade]]]:
+) -> Iterator[L3Add | L3Execute | L3Cancel]:
     """
-    Generate a realistic stream of market events with regime switching.
+    Generate a realistic stream of ITCH L3 messages with regime switching.
     
-    Yields tuples of (Order/CancelEvent, list of trades executed).
+    Yields L3Add, L3Execute, or L3Cancel messages directly.
     
     Regimes:
     - calm: Low volatility, tight spread, few market orders
@@ -135,8 +135,28 @@ def stream_fake_market(
                 agents, book, ctx, next_id, validate_orders=validate_orders
             )
             for order in agent_orders:
+                # Yield L3Add for limit orders
+                if order.type == OrderType.LIMIT:
+                    yield L3Add(
+                        timestamp=float(t),
+                        order_id=order.id,
+                        side=order.side.value,
+                        price_tick=order.price_tick,
+                        price=book.tick_to_price(order.price_tick),
+                        quantity=order.quantity,
+                    )
+                
+                # Process trades
                 trades = book.add_order(order)
-                yield order, trades
+                for trade in trades:
+                    yield L3Execute(
+                        timestamp=float(t),
+                        maker_id=trade.maker_id,
+                        price_tick=trade.price_tick,
+                        price=book.tick_to_price(trade.price_tick),
+                        quantity=trade.quantity,
+                        aggressor_side=order.side.value,
+                    )
 
         for _ in range(max(1, orders_per_tick)):
             side_bias = 0.5 + imbalance + (0.08 if momentum > 0 else -0.08)
@@ -163,7 +183,14 @@ def stream_fake_market(
                         price_tick = choice(bid_keys_cache)
                         canceled = book.cancel_at_price(cancel_side, price_tick)
                         if canceled:
-                            yield CancelEvent(cancel_side, price_tick, canceled.id), []
+                            yield L3Cancel(
+                                timestamp=float(t),
+                                order_id=canceled.id,
+                                side=cancel_side.value,
+                                price_tick=price_tick,
+                                price=book.tick_to_price(price_tick),
+                                cancelled_quantity=canceled.quantity,
+                            )
                 else:
                     levels = book.asks
                     if len(levels) != last_ask_levels:
@@ -173,7 +200,14 @@ def stream_fake_market(
                         price_tick = choice(ask_keys_cache)
                         canceled = book.cancel_at_price(cancel_side, price_tick)
                         if canceled:
-                            yield CancelEvent(cancel_side, price_tick, canceled.id), []
+                            yield L3Cancel(
+                                timestamp=float(t),
+                                order_id=canceled.id,
+                                side=cancel_side.value,
+                                price_tick=price_tick,
+                                price=book.tick_to_price(price_tick),
+                                cancelled_quantity=canceled.quantity,
+                            )
 
             if is_market:
                 order = Order(
@@ -225,8 +259,24 @@ def stream_fake_market(
                             timestamp=t,
                             validate=validate_orders,
                         )
+                        yield L3Add(
+                            timestamp=float(t),
+                            order_id=repl.id,
+                            side=repl.side.value,
+                            price_tick=repl.price_tick,
+                            price=book.tick_to_price(repl.price_tick),
+                            quantity=repl.quantity,
+                        )
                         repl_trades = book.add_order(repl)
-                        yield repl, repl_trades
+                        for trade in repl_trades:
+                            yield L3Execute(
+                                timestamp=float(t),
+                                maker_id=trade.maker_id,
+                                price_tick=trade.price_tick,
+                                price=book.tick_to_price(trade.price_tick),
+                                quantity=trade.quantity,
+                                aggressor_side=repl.side.value,
+                            )
                     if best_ask and abs(best_ask[0] - mid_tick) > max_gap_ticks:
                         repl = Order(
                             id=next_id + 20_000_000,
@@ -237,14 +287,50 @@ def stream_fake_market(
                             timestamp=t,
                             validate=validate_orders,
                         )
+                        yield L3Add(
+                            timestamp=float(t),
+                            order_id=repl.id,
+                            side=repl.side.value,
+                            price_tick=repl.price_tick,
+                            price=book.tick_to_price(repl.price_tick),
+                            quantity=repl.quantity,
+                        )
                         repl_trades = book.add_order(repl)
-                        yield repl, repl_trades
+                        for trade in repl_trades:
+                            yield L3Execute(
+                                timestamp=float(t),
+                                maker_id=trade.maker_id,
+                                price_tick=trade.price_tick,
+                                price=book.tick_to_price(trade.price_tick),
+                                quantity=trade.quantity,
+                                aggressor_side=repl.side.value,
+                            )
 
             next_id += 1
             t += 1
 
+            # Yield L3Add for limit orders before execution
+            if order.type == OrderType.LIMIT:
+                yield L3Add(
+                    timestamp=float(t),
+                    order_id=order.id,
+                    side=order.side.value,
+                    price_tick=order.price_tick,
+                    price=book.tick_to_price(order.price_tick),
+                    quantity=order.quantity,
+                )
+            
+            # Execute and yield trades as L3Execute
             trades = book.add_order(order)
-            yield order, trades
+            for trade in trades:
+                yield L3Execute(
+                    timestamp=float(t),
+                    maker_id=trade.maker_id,
+                    price_tick=trade.price_tick,
+                    price=book.tick_to_price(trade.price_tick),
+                    quantity=trade.quantity,
+                    aggressor_side=order.side.value,
+                )
 
         if sleep_sec > 0:
             time.sleep(sleep_sec)
@@ -254,11 +340,11 @@ def stream_fake_market_batch(
     book: Orderbook,
     batch_size: int = 100,
     **kwargs,
-) -> Iterator[list[tuple[Order | CancelEvent, list[Trade]]]]:
-    """Yield market events in batches for higher throughput."""
+) -> Iterator[list[L3Add | L3Execute | L3Cancel]]:
+    """Yield ITCH L3 messages in batches for higher throughput."""
     generator = stream_fake_market(book, **kwargs)
     while True:
-        batch: list[tuple[Order | CancelEvent, list[Trade]]] = []
+        batch: list[L3Add | L3Execute | L3Cancel] = []
         for _ in range(batch_size):
             batch.append(next(generator))
         yield batch
