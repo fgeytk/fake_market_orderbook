@@ -14,7 +14,7 @@ if __package__ in (None, ""):
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-from core import Order, Trade, OrderType, Side, CancelEvent, Orderbook, L3Add, L3Execute, L3Cancel
+from core import Order, Trade, OrderType, Side, Orderbook, L3Add, L3Execute, L3Cancel
 from core.config import VALIDATE_ORDERS
 from simulation.agents import AgentContext, BaseAgent, generate_agent_orders
 from simulation.stochastic import evolve_mid_price
@@ -135,20 +135,15 @@ def stream_fake_market(
                 agents, book, ctx, next_id, validate_orders=validate_orders
             )
             for order in agent_orders:
-                # Yield L3Add for limit orders
-                if order.type == OrderType.LIMIT:
-                    yield L3Add(
-                        timestamp=float(t),
-                        order_id=order.id,
-                        side=order.side.value,
-                        price_tick=order.price_tick,
-                        price=book.tick_to_price(order.price_tick),
-                        quantity=order.quantity,
-                    )
+                original_qty = order.quantity
+                original_price_tick = order.price_tick
                 
-                # Process trades
+                # Process trades - for LIMIT orders, remaining qty is posted to book
                 trades = book.add_order(order)
+                
+                # Emit executions
                 for trade in trades:
+                    t += 1
                     yield L3Execute(
                         timestamp=float(t),
                         maker_id=trade.maker_id,
@@ -156,6 +151,18 @@ def stream_fake_market(
                         price=book.tick_to_price(trade.price_tick),
                         quantity=trade.quantity,
                         aggressor_side=order.side.value,
+                    )
+                
+                # Emit L3Add only if LIMIT order was posted to book (remaining_qty > 0)
+                if order.type == OrderType.LIMIT and order.quantity > 0:
+                    t += 1
+                    yield L3Add(
+                        timestamp=float(t),
+                        order_id=order.id,
+                        side=order.side.value,
+                        price_tick=original_price_tick,
+                        price=book.tick_to_price(original_price_tick),
+                        quantity=order.quantity,
                     )
 
         for _ in range(max(1, orders_per_tick)):
@@ -183,6 +190,7 @@ def stream_fake_market(
                         price_tick = choice(bid_keys_cache)
                         canceled = book.cancel_at_price(cancel_side, price_tick)
                         if canceled:
+                            t += 1
                             yield L3Cancel(
                                 timestamp=float(t),
                                 order_id=canceled.id,
@@ -200,6 +208,7 @@ def stream_fake_market(
                         price_tick = choice(ask_keys_cache)
                         canceled = book.cancel_at_price(cancel_side, price_tick)
                         if canceled:
+                            t += 1
                             yield L3Cancel(
                                 timestamp=float(t),
                                 order_id=canceled.id,
@@ -259,16 +268,12 @@ def stream_fake_market(
                             timestamp=t,
                             validate=validate_orders,
                         )
-                        yield L3Add(
-                            timestamp=float(t),
-                            order_id=repl.id,
-                            side=repl.side.value,
-                            price_tick=repl.price_tick,
-                            price=book.tick_to_price(repl.price_tick),
-                            quantity=repl.quantity,
-                        )
+                        repl_price_tick = repl.price_tick
                         repl_trades = book.add_order(repl)
+                        
+                        # Emit executions
                         for trade in repl_trades:
+                            t += 1
                             yield L3Execute(
                                 timestamp=float(t),
                                 maker_id=trade.maker_id,
@@ -276,6 +281,18 @@ def stream_fake_market(
                                 price=book.tick_to_price(trade.price_tick),
                                 quantity=trade.quantity,
                                 aggressor_side=repl.side.value,
+                            )
+                        
+                        # Emit L3Add only if order was posted to book
+                        if repl.quantity > 0:
+                            t += 1
+                            yield L3Add(
+                                timestamp=float(t),
+                                order_id=repl.id,
+                                side=repl.side.value,
+                                price_tick=repl_price_tick,
+                                price=book.tick_to_price(repl_price_tick),
+                                quantity=repl.quantity,
                             )
                     if best_ask and abs(best_ask[0] - mid_tick) > max_gap_ticks:
                         repl = Order(
@@ -287,16 +304,12 @@ def stream_fake_market(
                             timestamp=t,
                             validate=validate_orders,
                         )
-                        yield L3Add(
-                            timestamp=float(t),
-                            order_id=repl.id,
-                            side=repl.side.value,
-                            price_tick=repl.price_tick,
-                            price=book.tick_to_price(repl.price_tick),
-                            quantity=repl.quantity,
-                        )
+                        repl_price_tick = repl.price_tick
                         repl_trades = book.add_order(repl)
+                        
+                        # Emit executions
                         for trade in repl_trades:
+                            t += 1
                             yield L3Execute(
                                 timestamp=float(t),
                                 maker_id=trade.maker_id,
@@ -305,24 +318,31 @@ def stream_fake_market(
                                 quantity=trade.quantity,
                                 aggressor_side=repl.side.value,
                             )
+                        
+                        # Emit L3Add only if order was posted to book
+                        if repl.quantity > 0:
+                            t += 1
+                            yield L3Add(
+                                timestamp=float(t),
+                                order_id=repl.id,
+                                side=repl.side.value,
+                                price_tick=repl_price_tick,
+                                price=book.tick_to_price(repl_price_tick),
+                                quantity=repl.quantity,
+                            )
 
             next_id += 1
-            t += 1
-
-            # Yield L3Add for limit orders before execution
-            if order.type == OrderType.LIMIT:
-                yield L3Add(
-                    timestamp=float(t),
-                    order_id=order.id,
-                    side=order.side.value,
-                    price_tick=order.price_tick,
-                    price=book.tick_to_price(order.price_tick),
-                    quantity=order.quantity,
-                )
             
-            # Execute and yield trades as L3Execute
+            # Store original values before add_order modifies them
+            original_qty = order.quantity
+            original_price_tick = order.price_tick
+            
+            # Execute order - for LIMIT orders, remaining qty is posted to book
             trades = book.add_order(order)
+            
+            # Emit executions first
             for trade in trades:
+                t += 1
                 yield L3Execute(
                     timestamp=float(t),
                     maker_id=trade.maker_id,
@@ -330,6 +350,18 @@ def stream_fake_market(
                     price=book.tick_to_price(trade.price_tick),
                     quantity=trade.quantity,
                     aggressor_side=order.side.value,
+                )
+            
+            # Emit L3Add only if LIMIT order was posted to book (remaining_qty > 0)
+            if order.type == OrderType.LIMIT and order.quantity > 0:
+                t += 1
+                yield L3Add(
+                    timestamp=float(t),
+                    order_id=order.id,
+                    side=order.side.value,
+                    price_tick=original_price_tick,
+                    price=book.tick_to_price(original_price_tick),
+                    quantity=order.quantity,
                 )
 
         if sleep_sec > 0:

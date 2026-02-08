@@ -6,13 +6,14 @@ import asyncio
 import json
 import threading
 import time
-from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from core import Orderbook
+from core.models import L3Add, L3Execute, L3Cancel
 from simulation import (
     stream_fake_market_batch,
     MarketMaker,
@@ -20,6 +21,43 @@ from simulation import (
     MeanReversionTrader,
     NoiseTrader,
 )
+
+
+def _serialize_l3_message(msg: L3Add | L3Execute | L3Cancel) -> dict[str, Any]:
+    """Fast serialization for L3 messages without intermediate dict creation."""
+    if isinstance(msg, L3Add):
+        return {
+            "msg_type": msg.msg_type,
+            "timestamp": msg.timestamp,
+            "order_id": msg.order_id,
+            "side": msg.side,
+            "price_tick": msg.price_tick,
+            "price": msg.price,
+            "quantity": msg.quantity,
+        }
+    elif isinstance(msg, L3Execute):
+        return {
+            "msg_type": msg.msg_type,
+            "timestamp": msg.timestamp,
+            "maker_id": msg.maker_id,
+            "price_tick": msg.price_tick,
+            "price": msg.price,
+            "quantity": msg.quantity,
+            "aggressor_side": msg.aggressor_side,
+        }
+    elif isinstance(msg, L3Cancel):
+        return {
+            "msg_type": msg.msg_type,
+            "timestamp": msg.timestamp,
+            "order_id": msg.order_id,
+            "side": msg.side,
+            "price_tick": msg.price_tick,
+            "price": msg.price,
+            "cancelled_quantity": msg.cancelled_quantity,
+        }
+    else:
+        # Fallback
+        return {}
 
 
 def _try_put(queue: asyncio.Queue[str], data: str) -> None:
@@ -56,8 +94,8 @@ def _producer(
 
     while not stop_event.is_set():
         itch_batch = next(generator)
-        # Convert batch to JSON
-        json_batch = [asdict(msg) for msg in itch_batch]
+        # Fast serialization without intermediate dict creation
+        json_batch = [_serialize_l3_message(msg) for msg in itch_batch]
         data = json.dumps(json_batch)
         loop.call_soon_threadsafe(_try_put, queue, data)
 

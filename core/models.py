@@ -70,14 +70,6 @@ class Trade:
     quantity: int
 
 
-@dataclass(slots=True)
-class CancelEvent:
-    """Represents an order cancellation event."""
-    side: Side
-    price_tick: int
-    order_id: int | None
-
-
 # ITCH L3 Messages
 @dataclass(slots=True)
 class L3Add:
@@ -89,6 +81,22 @@ class L3Add:
     price_tick: int = 0
     price: float = 0.0
     quantity: int = 0
+
+    def __post_init__(self) -> None:
+        if self.msg_type != "ADD":
+            raise ValueError("msg_type must be 'ADD'")
+        if self.timestamp < 0.0:
+            raise ValueError("timestamp must be >= 0")
+        if self.order_id < 0:
+            raise ValueError("order_id must be >= 0")
+        if self.side not in ("BID", "ASK"):
+            raise ValueError("side must be 'BID' or 'ASK'")
+        if self.price_tick <= 0:
+            raise ValueError("price_tick must be > 0")
+        if self.price <= 0.0:
+            raise ValueError("price must be > 0")
+        if self.quantity <= 0:
+            raise ValueError("quantity must be > 0")
 
 
 @dataclass(slots=True)
@@ -102,6 +110,22 @@ class L3Execute:
     quantity: int = 0
     aggressor_side: str = ""
 
+    def __post_init__(self) -> None:
+        if self.msg_type != "EXECUTE":
+            raise ValueError("msg_type must be 'EXECUTE'")
+        if self.timestamp < 0.0:
+            raise ValueError("timestamp must be >= 0")
+        if self.maker_id < 0:
+            raise ValueError("maker_id must be >= 0")
+        if self.price_tick <= 0:
+            raise ValueError("price_tick must be > 0")
+        if self.price <= 0.0:
+            raise ValueError("price must be > 0")
+        if self.quantity <= 0:
+            raise ValueError("quantity must be > 0")
+        if self.aggressor_side not in ("BID", "ASK"):
+            raise ValueError("aggressor_side must be 'BID' or 'ASK'")
+
 
 @dataclass(slots=True)
 class L3Cancel:
@@ -113,3 +137,19 @@ class L3Cancel:
     price_tick: int = 0
     price: float = 0.0
     cancelled_quantity: int = 0
+
+    def __post_init__(self) -> None:
+        if self.msg_type != "CANCEL":
+            raise ValueError("msg_type must be 'CANCEL'")
+        if self.timestamp < 0.0:
+            raise ValueError("timestamp must be >= 0")
+        if self.order_id < 0:
+            raise ValueError("order_id must be >= 0")
+        if self.side not in ("BID", "ASK"):
+            raise ValueError("side must be 'BID' or 'ASK'")
+        if self.price_tick <= 0:
+            raise ValueError("price_tick must be > 0")
+        if self.price <= 0.0:
+            raise ValueError("price must be > 0")
+        if self.cancelled_quantity < 0:
+            raise ValueError("cancelled_quantity must be >= 0")

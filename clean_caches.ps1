@@ -1,3 +1,6 @@
+# Arrêter le serveur s'il tourne encore
+Get-Process -Name python -ErrorAction SilentlyContinue | Where-Object {$_.Path -like "*\.venv*"} | Stop-Process -Force
+
 $root = Get-Location
 $dirs = @(
   "__pycache__",
