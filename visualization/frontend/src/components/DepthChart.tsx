@@ -3,10 +3,9 @@ import { OrderbookSnapshot } from '../types/orderbook';
 
 interface DepthChartProps {
   snapshot: OrderbookSnapshot | null;
-  zoom: number;
 }
 
-export const DepthChart: React.FC<DepthChartProps> = ({ snapshot, zoom }) => {
+export const DepthChart: React.FC<DepthChartProps> = ({ snapshot }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const rafRef = useRef<number>(0);
@@ -65,7 +64,7 @@ export const DepthChart: React.FC<DepthChartProps> = ({ snapshot, zoom }) => {
       const midX = width / 2;
 
       const maxLevels = Math.max(bids.length, asks.length);
-      const rows = Math.max(10, Math.floor((height - 40) / Math.max(1, zoom)));
+      const rows = Math.max(10, Math.floor(height - 40));
       const barHeight = Math.max(1, (height - 40) / (Math.min(maxLevels, rows) + 2));
 
       const binnedBids = compressLevels(bids, rows);
@@ -118,17 +117,12 @@ export const DepthChart: React.FC<DepthChartProps> = ({ snapshot, zoom }) => {
     };
 
     rafRef.current = requestAnimationFrame(render);
-  }, [snapshot, zoom]);
+  }, [snapshot]);
 
   return (
     <canvas
       ref={canvasRef}
-      style={{
-        width: '100%',
-        height: '100%',
-        borderRadius: '12px',
-        border: '1px solid #1f2937',
-      }}
+      className="canvas-frame"
     />
   );
 };

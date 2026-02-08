@@ -133,12 +133,7 @@ export const PriceChart: React.FC<PriceChartProps> = ({ snapshot }) => {
   return (
     <canvas
       ref={canvasRef}
-      style={{
-        width: '100%',
-        height: '100%',
-        borderRadius: '12px',
-        border: '1px solid #1f2937',
-      }}
+      className="canvas-frame"
     />
   );
 };
