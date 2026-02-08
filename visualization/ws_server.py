@@ -31,14 +31,14 @@ def _try_put(queue: asyncio.Queue[bytes], data: bytes) -> None:
 
 
 def _get_orderbook_snapshot(book: Orderbook, seq: int, timestamp: int) -> dict[str, Any]:
-    """Extract top N levels from orderbook as snapshot."""
-    max_levels = 20
+    """Extract full depth from orderbook as snapshot."""
+    max_levels = None
     
     # Get sorted bids (descending) and asks (ascending)
     bids = []
     if book.bid_heap:
         sorted_bid_ticks = sorted([-tick for tick in book.bid_heap], reverse=True)
-        for tick in sorted_bid_ticks[:max_levels]:
+        for tick in (sorted_bid_ticks if max_levels is None else sorted_bid_ticks[:max_levels]):
             if tick in book.bids and book.bids[tick]:
                 price = book.tick_to_price(tick)
                 size = book.bid_sizes.get(tick, 0)
@@ -47,7 +47,7 @@ def _get_orderbook_snapshot(book: Orderbook, seq: int, timestamp: int) -> dict[s
     asks = []
     if book.ask_heap:
         sorted_ask_ticks = sorted(book.ask_heap)
-        for tick in sorted_ask_ticks[:max_levels]:
+        for tick in (sorted_ask_ticks if max_levels is None else sorted_ask_ticks[:max_levels]):
             if tick in book.asks and book.asks[tick]:
                 price = book.tick_to_price(tick)
                 size = book.ask_sizes.get(tick, 0)
@@ -94,7 +94,7 @@ def _producer(
         # Get snapshot after processing batch
         timestamp = time.time_ns()
         snapshot = _get_orderbook_snapshot(book, seq, timestamp)
-        data = msgpack.packb(snapshot)
+        data = msgpack.packb(snapshot, use_bin_type=True)
         loop.call_soon_threadsafe(_try_put, queue, data)
 
         next_ts += interval

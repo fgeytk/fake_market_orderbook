@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { decode } from '@msgpack/msgpack';
 import { OrderbookSnapshot } from '../types/orderbook';
 
 interface UseWebSocketReturn {
@@ -13,23 +14,11 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
   const [latency, setLatency] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const textDecoderRef = useRef<TextDecoder | null>(null);
 
   const connect = useCallback(() => {
-    if (!workerRef.current) {
-      workerRef.current = new Worker(
-        new URL('../workers/msgpack.worker.ts', import.meta.url),
-        { type: 'module' }
-      );
-      
-      workerRef.current.onmessage = (e) => {
-        const { result } = e.data;
-        if (result) {
-          const now = Date.now() * 1e6;
-          const latencyNs = Math.max(0, now - result.ts);
-          setLatency(latencyNs / 1e6);
-          setSnapshot(result);
-        }
-      };
+    if (!textDecoderRef.current) {
+      textDecoderRef.current = new TextDecoder();
     }
 
     const ws = new WebSocket(url);
@@ -43,12 +32,27 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
       setTimeout(connect, 1000);
     };
 
-    ws.onmessage = (event) => {
-      if (event.data && workerRef.current) {
-        workerRef.current.postMessage({
-          data: new Uint8Array(event.data),
-          id: Date.now(),
-        });
+    ws.onmessage = async (event) => {
+      if (!event.data) return;
+
+      let payload: ArrayBuffer;
+      if (event.data instanceof Blob) {
+        payload = await event.data.arrayBuffer();
+      } else {
+        payload = event.data as ArrayBuffer;
+      }
+
+      try {
+        const decoded = decode(new Uint8Array(payload));
+        const normalized = normalizeSnapshot(decoded, textDecoderRef.current!);
+        if (normalized) {
+          const now = Date.now() * 1e6;
+          const latencyNs = Math.max(0, now - normalized.ts);
+          setLatency(latencyNs / 1e6);
+          setSnapshot(normalized);
+        }
+      } catch (err) {
+        console.error('MessagePack decode error:', err);
       }
     };
   }, [url]);
@@ -64,3 +68,28 @@ export const useWebSocket = (url: string): UseWebSocketReturn => {
 
   return { snapshot, status, latency };
 };
+
+function normalizeSnapshot(
+  decoded: unknown,
+  decoder: TextDecoder
+): OrderbookSnapshot | null {
+  if (!decoded) return null;
+
+  let value = decoded as any;
+  if (value instanceof Map) {
+    const obj: Record<string, any> = {};
+    for (const [key, val] of value.entries()) {
+      if (key instanceof Uint8Array) {
+        obj[decoder.decode(key)] = val;
+      } else {
+        obj[String(key)] = val;
+      }
+    }
+    value = obj;
+  }
+
+  if (!value || typeof value !== 'object') return null;
+  if (!('ts' in value) || !('bids' in value) || !('asks' in value)) return null;
+
+  return value as OrderbookSnapshot;
+}

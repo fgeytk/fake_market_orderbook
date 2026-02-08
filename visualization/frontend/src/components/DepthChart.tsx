@@ -3,36 +3,32 @@ import { OrderbookSnapshot } from '../types/orderbook';
 
 interface DepthChartProps {
   snapshot: OrderbookSnapshot | null;
+  zoom: number;
 }
 
-export const DepthChart: React.FC<DepthChartProps> = ({ snapshot }) => {
+export const DepthChart: React.FC<DepthChartProps> = ({ snapshot, zoom }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const glRef = useRef<WebGLRenderingContext | null>(null);
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const rafRef = useRef<number>(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const gl = canvas.getContext('webgl', {
-      alpha: false,
-      antialias: false,
-      depth: false,
-    });
-
-    if (!gl) {
-      console.error('WebGL not supported, falling back to 2D');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      console.error('Canvas 2D not supported');
       return;
     }
 
-    glRef.current = gl;
+    ctxRef.current = ctx;
 
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
-      gl.viewport(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
     resize();
@@ -45,39 +41,40 @@ export const DepthChart: React.FC<DepthChartProps> = ({ snapshot }) => {
   }, []);
 
   useEffect(() => {
-    if (!snapshot || !glRef.current) return;
+    if (!ctxRef.current) return;
 
-    const gl = glRef.current;
+    const ctx = ctxRef.current;
     const canvas = canvasRef.current!;
 
     const render = () => {
-      // Clear
-      gl.clearColor(0.04, 0.06, 0.09, 1.0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-
-      // Simple 2D rendering for MVP (WebGL shaders would go here for production)
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      const { bids, asks } = snapshot;
+      // Background
       const width = canvas.width / (window.devicePixelRatio || 1);
       const height = canvas.height / (window.devicePixelRatio || 1);
-      const midX = width / 2;
-
-      ctx.save();
-      ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
-
-      // Background
+      ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = '#0a0f19';
       ctx.fillRect(0, 0, width, height);
 
+      if (!snapshot) {
+        ctx.fillStyle = '#6b7280';
+        ctx.font = '12px monospace';
+        ctx.fillText('Waiting for data...', 16, 24);
+        return;
+      }
+
+      const { bids, asks } = snapshot;
+      const midX = width / 2;
+
       const maxLevels = Math.max(bids.length, asks.length);
-      const barHeight = Math.max(4, (height - 40) / (maxLevels + 2));
+      const rows = Math.max(10, Math.floor((height - 40) / Math.max(1, zoom)));
+      const barHeight = Math.max(1, (height - 40) / (Math.min(maxLevels, rows) + 2));
+
+      const binnedBids = compressLevels(bids, rows);
+      const binnedAsks = compressLevels(asks, rows);
 
       const maxSize = Math.max(
         1,
-        ...bids.map(b => b[1]),
-        ...asks.map(a => a[1])
+        ...binnedBids.map(b => b[1]),
+        ...binnedAsks.map(a => a[1])
       );
 
       const scale = (width * 0.42) / maxSize;
@@ -89,7 +86,7 @@ export const DepthChart: React.FC<DepthChartProps> = ({ snapshot }) => {
       ctx.fillText('ASK', midX + 10, 18);
 
       // Bids
-      bids.forEach(([price, size], idx) => {
+      binnedBids.forEach(([price, size], idx) => {
         const barWidth = size * scale;
         const y = 30 + idx * barHeight;
 
@@ -104,7 +101,7 @@ export const DepthChart: React.FC<DepthChartProps> = ({ snapshot }) => {
       });
 
       // Asks
-      asks.forEach(([price, size], idx) => {
+      binnedAsks.forEach(([price, size], idx) => {
         const barWidth = size * scale;
         const y = 30 + idx * barHeight;
 
@@ -118,11 +115,10 @@ export const DepthChart: React.FC<DepthChartProps> = ({ snapshot }) => {
         ctx.fillText(`${size}`, midX + 4, y + barHeight * 0.65);
       });
 
-      ctx.restore();
     };
 
     rafRef.current = requestAnimationFrame(render);
-  }, [snapshot]);
+  }, [snapshot, zoom]);
 
   return (
     <canvas
@@ -136,3 +132,18 @@ export const DepthChart: React.FC<DepthChartProps> = ({ snapshot }) => {
     />
   );
 };
+
+function compressLevels(levels: [number, number][], rows: number): [number, number][] {
+  if (levels.length <= rows) return levels;
+
+  const binSize = Math.ceil(levels.length / rows);
+  const result: [number, number][] = [];
+  for (let i = 0; i < levels.length; i += binSize) {
+    const slice = levels.slice(i, i + binSize);
+    const size = slice.reduce((sum, [, qty]) => sum + qty, 0);
+    const price = slice[slice.length - 1][0];
+    result.push([price, size]);
+  }
+
+  return result;
+}
