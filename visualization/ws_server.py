@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import msgpack
 import threading
 import time
 from pathlib import Path
@@ -23,53 +23,47 @@ from simulation import (
 )
 
 
-def _serialize_l3_message(msg: L3Add | L3Execute | L3Cancel) -> dict[str, Any]:
-    """Fast serialization for L3 messages without intermediate dict creation."""
-    if isinstance(msg, L3Add):
-        return {
-            "msg_type": msg.msg_type,
-            "timestamp": msg.timestamp,
-            "order_id": msg.order_id,
-            "side": msg.side,
-            "price_tick": msg.price_tick,
-            "price": msg.price,
-            "quantity": msg.quantity,
-        }
-    elif isinstance(msg, L3Execute):
-        return {
-            "msg_type": msg.msg_type,
-            "timestamp": msg.timestamp,
-            "maker_id": msg.maker_id,
-            "price_tick": msg.price_tick,
-            "price": msg.price,
-            "quantity": msg.quantity,
-            "aggressor_side": msg.aggressor_side,
-        }
-    elif isinstance(msg, L3Cancel):
-        return {
-            "msg_type": msg.msg_type,
-            "timestamp": msg.timestamp,
-            "order_id": msg.order_id,
-            "side": msg.side,
-            "price_tick": msg.price_tick,
-            "price": msg.price,
-            "cancelled_quantity": msg.cancelled_quantity,
-        }
-    else:
-        # Fallback
-        return {}
-
-
-def _try_put(queue: asyncio.Queue[str], data: str) -> None:
+def _try_put(queue: asyncio.Queue[bytes], data: bytes) -> None:
     try:
         queue.put_nowait(data)
     except asyncio.QueueFull:
         pass
 
 
+def _get_orderbook_snapshot(book: Orderbook, seq: int, timestamp: int) -> dict[str, Any]:
+    """Extract top N levels from orderbook as snapshot."""
+    max_levels = 20
+    
+    # Get sorted bids (descending) and asks (ascending)
+    bids = []
+    if book.bid_heap:
+        sorted_bid_ticks = sorted([-tick for tick in book.bid_heap], reverse=True)
+        for tick in sorted_bid_ticks[:max_levels]:
+            if tick in book.bids and book.bids[tick]:
+                price = book.tick_to_price(tick)
+                size = book.bid_sizes.get(tick, 0)
+                bids.append([price, size])
+    
+    asks = []
+    if book.ask_heap:
+        sorted_ask_ticks = sorted(book.ask_heap)
+        for tick in sorted_ask_ticks[:max_levels]:
+            if tick in book.asks and book.asks[tick]:
+                price = book.tick_to_price(tick)
+                size = book.ask_sizes.get(tick, 0)
+                asks.append([price, size])
+    
+    return {
+        "ts": timestamp,
+        "seq": seq,
+        "bids": bids,
+        "asks": asks,
+    }
+
+
 def _producer(
     loop: asyncio.AbstractEventLoop,
-    queue: asyncio.Queue[str],
+    queue: asyncio.Queue[bytes],
     stop_event: threading.Event,
     batch_size: int,
     target_fps: int,
@@ -91,12 +85,16 @@ def _producer(
 
     interval = 1.0 / max(1, target_fps)
     next_ts = time.perf_counter()
+    seq = 0
 
     while not stop_event.is_set():
         itch_batch = next(generator)
-        # Fast serialization without intermediate dict creation
-        json_batch = [_serialize_l3_message(msg) for msg in itch_batch]
-        data = json.dumps(json_batch)
+        seq += len(itch_batch)
+        
+        # Get snapshot after processing batch
+        timestamp = time.time_ns()
+        snapshot = _get_orderbook_snapshot(book, seq, timestamp)
+        data = msgpack.packb(snapshot)
         loop.call_soon_threadsafe(_try_put, queue, data)
 
         next_ts += interval
@@ -111,9 +109,15 @@ def create_ws_app(
 ) -> FastAPI:
     app = FastAPI()
 
+    # Mount old web UI
     web_dir = Path(__file__).resolve().parent / "web"
     if web_dir.exists():
         app.mount("/ui", StaticFiles(directory=str(web_dir), html=True), name="ui")
+    
+    # Mount new React frontend
+    frontend_dir = Path(__file__).resolve().parent / "frontend" / "dist"
+    if frontend_dir.exists():
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
     app.state.clients = set()
     app.state.queue = asyncio.Queue(maxsize=10)
@@ -161,7 +165,7 @@ def create_ws_app(
         app.state.clients.add(websocket)
         try:
             while True:
-                await websocket.receive()
+                await websocket.receive_text()
         except WebSocketDisconnect:
             pass
         finally:
@@ -171,7 +175,7 @@ def create_ws_app(
 
 
 async def _broadcast_loop(app: FastAPI) -> None:
-    queue: asyncio.Queue[str] = app.state.queue
+    queue: asyncio.Queue[bytes] = app.state.queue
     while True:
         data = await queue.get()
         if not app.state.clients:
@@ -179,7 +183,7 @@ async def _broadcast_loop(app: FastAPI) -> None:
         dead: list[WebSocket] = []
         for ws in list(app.state.clients):
             try:
-                await ws.send_text(data)
+                await ws.send_bytes(data)
             except Exception:
                 dead.append(ws)
         for ws in dead:
