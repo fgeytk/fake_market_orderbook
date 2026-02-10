@@ -1,397 +1,247 @@
-"""Realistic market data generator with regime switching."""
+"""Realistic market‑data generator — thin orchestrator.
+
+All heavy logic is delegated to:
+  - ``simulation.config``     → SimulationConfig
+  - ``simulation.stochastic`` → price evolution & intraday curves
+  - ``simulation.book_ops``   → seed / purge / clear
+  - ``simulation.order_flow`` → random orders, cancels, replenish, L3 emit
+  - ``simulation.agents``     → pluggable trading agents
+"""
 
 from __future__ import annotations
 
 import sys
 import time
 import random
-from dataclasses import asdict
 from pathlib import Path
 from typing import Iterator
 
 if __package__ in (None, ""):
-    project_root = Path(__file__).resolve().parents[1]
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
+    _root = Path(__file__).resolve().parents[1]
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
 
-from core import Order, Trade, OrderType, Side, Orderbook, L3Add, L3Execute, L3Cancel
-from core.config import VALIDATE_ORDERS
-from simulation.agents import AgentContext, BaseAgent, generate_agent_orders
-from simulation.stochastic import evolve_mid_price
+from core import Order, OrderType, Side, Orderbook, L3Add, L3Execute, L3Cancel
+from simulation.config import SimulationConfig
+from simulation.agents import AgentContext, BaseAgent, MarketMaker, NoiseTrader, generate_agent_orders
+from simulation.stochastic import (
+    evolve_mid_price,
+    intraday_activity_factor,
+    intraday_volatility_factor,
+    overnight_gap,
+    daily_drift,
+)
+from simulation.book_ops import clear_book, purge_stale_orders, seed_book
+from simulation.order_flow import (
+    emit_order,
+    try_cancel_owned,
+    make_random_order,
+    replenish_book,
+)
 
+
+# ------------------------------------------------------------------
+# Main generator
+# ------------------------------------------------------------------
 
 def stream_fake_market(
     book: Orderbook,
-    start_price: float = 10.0,
-    spread: float = 0.5,
-    seed: int = 42,
-    market_ratio: float = 0.2,
-    sleep_sec: float = 0.5,
-    regime_switch_prob: float = 0.01,
-    cancel_ratio: float = 0.05,
-    orders_per_tick: int = 10,
-    replenish: bool = True,
-    min_price: float = 1.0,
-    mean_reversion: float = 0.002,
-    validate_orders: bool = VALIDATE_ORDERS,
+    cfg: SimulationConfig | None = None,
     agents: list[BaseAgent] | None = None,
+    # ---- legacy kwargs kept for backward compat ----
+    **overrides,
 ) -> Iterator[L3Add | L3Execute | L3Cancel]:
+    """Generate a realistic stream of ITCH L3 messages.
+
+    Parameters
+    ----------
+    book : Orderbook
+        The order book instance to operate on.
+    cfg : SimulationConfig, optional
+        Full configuration.  If ``None`` a default is built (can be
+        patched via *overrides*).
+    agents : list[BaseAgent], optional
+        Pluggable trading agents.
+    **overrides
+        Any ``SimulationConfig`` field name → value to override.
+        ``start_price``, ``spread``, ``seed``, ``sleep_sec``, etc.
     """
-    Generate a realistic stream of ITCH L3 messages with regime switching.
-    
-    Yields L3Add, L3Execute, or L3Cancel messages directly.
-    
-    Regimes:
-    - calm: Low volatility, tight spread, few market orders
-    - normal: Medium volatility, normal spread
-    - stress: High volatility, wide spread, many market orders
-    validate_orders=False skips Order validation for higher throughput.
-    """
-    rng = random.Random(seed)
-    rnd = rng.random
-    gauss = rng.gauss
-    lognorm = rng.lognormvariate
-    expov = rng.expovariate
-    choice = rng.choice
-    uniform = rng.uniform
+    if cfg is None:
+        cfg = SimulationConfig(**{
+            k: v for k, v in overrides.items()
+            if k in SimulationConfig.__dataclass_fields__
+        })
+
+    rng = random.Random(cfg.seed)
     next_id = 1
     t = 0
-    min_price = max(book.tick_size, min_price)
+    min_price = max(book.tick_size, cfg.min_price)
     min_tick = book.price_to_tick(min_price)
-    mid_price = max(min_price, start_price)
+    mid_price = max(min_price, cfg.start_price)
+    anchor_price = mid_price
     momentum = 0.0
-    regimes = {
-        "calm": {
-            "sigma": 0.003,
-            "jump_prob": 0.001,
-            "jump_sigma": 0.02,
-            "spread_mult": 0.8,
-            "market_ratio": 0.1,
-            "imbalance": 0.02,
-        },
-        "normal": {
-            "sigma": 0.01,
-            "jump_prob": 0.003,
-            "jump_sigma": 0.05,
-            "spread_mult": 1.0,
-            "market_ratio": 0.2,
-            "imbalance": 0.0,
-        },
-        "stress": {
-            "sigma": 0.03,
-            "jump_prob": 0.01,
-            "jump_sigma": 0.12,
-            "spread_mult": 1.8,
-            "market_ratio": 0.35,
-            "imbalance": -0.05,
-        },
-    }
-    regime_names = list(regimes.keys())
     regime = "normal"
-    bid_keys_cache: list[int] = []
-    ask_keys_cache: list[int] = []
-    last_bid_levels = -1
-    last_ask_levels = -1
 
-    while True:
-        if rnd() < regime_switch_prob:
-            regime = choice(regime_names)
+    # Ensure we always have agents for order ownership
+    if not agents:
+        agents = [
+            MarketMaker(),
+            MarketMaker(spread_ticks=3, size=8),
+            NoiseTrader(),
+            NoiseTrader(spread_ticks=6, size=5),
+        ]
 
-        params = regimes[regime]
-        sigma = params["sigma"]
-        jump_prob = params["jump_prob"]
-        jump_sigma = params["jump_sigma"]
-        spread_mult = params["spread_mult"]
-        market_ratio_regime = params["market_ratio"]
-        imbalance = params["imbalance"]
+    # ================================================================
+    # Day loop
+    # ================================================================
+    day = 0
+    while cfg.num_days is None or day < cfg.num_days:
 
-        # stochastic volatility random walk with occasional jumps
-        mid_price, momentum, regime = evolve_mid_price(
-            rng,
-            mid_price,
-            momentum,
-            regimes,
-            regime,
-            regime_switch_prob=regime_switch_prob,
-            anchor_price=start_price,
-            mean_reversion=mean_reversion,
-            min_price=min_price,
+        # ---- pre‑market seeding ----
+        next_id = seed_book(
+            book, mid_price, cfg.spread, rng, next_id,
+            n_levels=cfg.seed_levels,
+            orders_per_level=cfg.seed_orders_per_level,
+            validate=cfg.validate_orders,
+            agents=agents,
         )
-        if mid_price < min_price:
-            mid_price = min_price
 
-        # agent orders (optional)
-        if agents:
-            mid_tick = book.price_to_tick(mid_price)
-            ctx = AgentContext(
-                t=t,
-                mid_price=mid_price,
-                mid_tick=mid_tick,
-                best_bid=book.best_bid(),
-                best_ask=book.best_ask(),
-                momentum=momentum,
+        for sec in range(cfg.session_seconds):
+            # intraday modulation
+            activity = intraday_activity_factor(sec, cfg.session_seconds)
+            vol_scale = intraday_volatility_factor(sec, cfg.session_seconds)
+
+            # periodic stale‑order purge (agent-driven)
+            if sec > 0 and sec % cfg.stale_purge_interval == 0:
+                mid_tick = book.price_to_tick(mid_price)
+                for msg, t in purge_stale_orders(
+                    book, agents, mid_tick, cfg.stale_purge_distance, rng, t,
+                ):
+                    yield msg
+
+            # regime switch
+            if rng.random() < cfg.regime_switch_prob:
+                regime = rng.choice(list(cfg.regimes.keys()))
+
+            params = cfg.regimes[regime]
+            spread_mult = params["spread_mult"]
+            imbalance = params["imbalance"]
+
+            # evolve mid price
+            mid_price, momentum, regime = evolve_mid_price(
+                rng, mid_price, momentum, cfg.regimes, regime,
+                regime_switch_prob=cfg.regime_switch_prob,
+                anchor_price=anchor_price,
+                mean_reversion=cfg.mean_reversion,
+                min_price=min_price,
+                volatility_scale=vol_scale,
             )
-            agent_orders, next_id = generate_agent_orders(
-                agents, book, ctx, next_id, validate_orders=validate_orders
-            )
-            for order in agent_orders:
-                original_qty = order.quantity
-                original_price_tick = order.price_tick
-                
-                # Process trades - for LIMIT orders, remaining qty is posted to book
-                trades = book.add_order(order)
-                
-                # Emit executions
-                for trade in trades:
-                    t += 1
-                    yield L3Execute(
-                        timestamp=float(t),
-                        maker_id=trade.maker_id,
-                        price_tick=trade.price_tick,
-                        price=book.tick_to_price(trade.price_tick),
-                        quantity=trade.quantity,
-                        aggressor_side=order.side.value,
-                    )
-                
-                # Emit L3Add only if LIMIT order was posted to book (remaining_qty > 0)
-                if order.type == OrderType.LIMIT and order.quantity > 0:
-                    t += 1
-                    yield L3Add(
-                        timestamp=float(t),
-                        order_id=order.id,
-                        side=order.side.value,
-                        price_tick=original_price_tick,
-                        price=book.tick_to_price(original_price_tick),
-                        quantity=order.quantity,
-                    )
+            mid_price = max(min_price, mid_price)
 
-        for _ in range(max(1, orders_per_tick)):
-            side_bias = 0.5 + imbalance + (0.08 if momentum > 0 else -0.08)
-            side_bias = min(max(side_bias, 0.05), 0.95)
-            side = Side.BID if rnd() < side_bias else Side.ASK
-
-            effective_market_ratio = max(
-                0.01, min(0.9, market_ratio * market_ratio_regime / 0.2)
-            )
-            is_market = rnd() < effective_market_ratio
-
-            # heavy-tailed order sizes
-            qty = int(max(1, min(500, lognorm(2.2, 0.8))))
-
-            # occasional cancellations (observable)
-            if rnd() < cancel_ratio:
-                cancel_side = Side.BID if rnd() < 0.5 else Side.ASK
-                if cancel_side == Side.BID:
-                    levels = book.bids
-                    if len(levels) != last_bid_levels:
-                        bid_keys_cache = list(levels.keys())
-                        last_bid_levels = len(levels)
-                    if bid_keys_cache:
-                        price_tick = choice(bid_keys_cache)
-                        canceled = book.cancel_at_price(cancel_side, price_tick)
-                        if canceled:
-                            t += 1
-                            yield L3Cancel(
-                                timestamp=float(t),
-                                order_id=canceled.id,
-                                side=cancel_side.value,
-                                price_tick=price_tick,
-                                price=book.tick_to_price(price_tick),
-                                cancelled_quantity=canceled.quantity,
-                            )
-                else:
-                    levels = book.asks
-                    if len(levels) != last_ask_levels:
-                        ask_keys_cache = list(levels.keys())
-                        last_ask_levels = len(levels)
-                    if ask_keys_cache:
-                        price_tick = choice(ask_keys_cache)
-                        canceled = book.cancel_at_price(cancel_side, price_tick)
-                        if canceled:
-                            t += 1
-                            yield L3Cancel(
-                                timestamp=float(t),
-                                order_id=canceled.id,
-                                side=cancel_side.value,
-                                price_tick=price_tick,
-                                price=book.tick_to_price(price_tick),
-                                cancelled_quantity=canceled.quantity,
-                            )
-
-            if is_market:
-                order = Order(
-                    id=next_id,
-                    side=side,
-                    type=OrderType.MARKET,
-                    quantity=qty,
-                    price_tick=None,
-                    timestamp=t,
-                    validate=validate_orders,
+            # ---- agent orders ----
+            if agents:
+                mid_tick = book.price_to_tick(mid_price)
+                ctx = AgentContext(
+                    t=t,
+                    mid_price=mid_price,
+                    mid_tick=mid_tick,
+                    best_bid=book.best_bid(),
+                    best_ask=book.best_ask(),
+                    momentum=momentum,
                 )
-            else:
-                dynamic_spread = spread * spread_mult
-                # concentrate liquidity near mid: exponential offset + small jitter
-                base_offset = expov(1.0 / max(0.01, dynamic_spread * 0.35))
-                offset = dynamic_spread / 2 + base_offset
-                if rnd() < 0.6:
-                    offset *= uniform(0.2, 0.6)
+                for agent in agents:
+                    agent_orders, next_id = agent.generate_orders(
+                        book, ctx, next_id,
+                        validate_orders=cfg.validate_orders,
+                    )
+                    for order in agent_orders:
+                        for msg, t in emit_order(book, order, t):
+                            yield msg
+                        # track ownership: this agent placed it
+                        if order.id in book.order_index:
+                            agent.on_order_placed(order.id)
 
-                price = mid_price - offset if side == Side.BID else mid_price + offset
+            # ---- random order flow ----
+            n_orders = max(1, int(cfg.orders_per_tick * activity))
+            for _ in range(n_orders):
+                # side bias
+                side_bias = 0.5 + imbalance + (0.05 if momentum > 0 else -0.05)
+                side_bias = min(max(side_bias, 0.05), 0.95)
+                side = Side.BID if rng.random() < side_bias else Side.ASK
 
-                # liquidity clustering around round levels
-                if rnd() < 0.5:
-                    price = round(price * 20) / 20  # cluster to 0.05
-                price_tick = max(min_tick, book.price_to_tick(max(min_price, price)))
-                order = Order(
-                    id=next_id,
-                    side=side,
-                    type=OrderType.LIMIT,
-                    quantity=qty,
-                    price_tick=price_tick,
-                    timestamp=t,
-                    validate=validate_orders,
+                eff_market_ratio = max(
+                    0.01,
+                    min(0.9, cfg.market_ratio * params["market_ratio"] / 0.15),
                 )
+                is_market = rng.random() < eff_market_ratio
 
-                # keep top of book close to mid by adding a replenishing order
-                if replenish:
-                    best_bid = book.best_bid()
-                    best_ask = book.best_ask()
+                # cancellations (owner-initiated)
+                if rng.random() < cfg.cancel_ratio:
                     mid_tick = book.price_to_tick(mid_price)
-                    max_gap_ticks = max(1, int(round((dynamic_spread * 2.5) / book.tick_size)))
-                    if best_bid and abs(mid_tick - best_bid[0]) > max_gap_ticks:
-                        repl = Order(
-                            id=next_id + 10_000_000,
-                            side=Side.BID,
-                            type=OrderType.LIMIT,
-                            quantity=max(1, qty // 2),
-                            price_tick=max(min_tick, mid_tick - max(1, int(round(dynamic_spread / (2 * book.tick_size))))),
-                            timestamp=t,
-                            validate=validate_orders,
-                        )
-                        repl_price_tick = repl.price_tick
-                        repl_trades = book.add_order(repl)
-                        
-                        # Emit executions
-                        for trade in repl_trades:
-                            t += 1
-                            yield L3Execute(
-                                timestamp=float(t),
-                                maker_id=trade.maker_id,
-                                price_tick=trade.price_tick,
-                                price=book.tick_to_price(trade.price_tick),
-                                quantity=trade.quantity,
-                                aggressor_side=repl.side.value,
-                            )
-                        
-                        # Emit L3Add only if order was posted to book
-                        if repl.quantity > 0:
-                            t += 1
-                            yield L3Add(
-                                timestamp=float(t),
-                                order_id=repl.id,
-                                side=repl.side.value,
-                                price_tick=repl_price_tick,
-                                price=book.tick_to_price(repl_price_tick),
-                                quantity=repl.quantity,
-                            )
-                    if best_ask and abs(best_ask[0] - mid_tick) > max_gap_ticks:
-                        repl = Order(
-                            id=next_id + 20_000_000,
-                            side=Side.ASK,
-                            type=OrderType.LIMIT,
-                            quantity=max(1, qty // 2),
-                            price_tick=mid_tick + max(1, int(round(dynamic_spread / (2 * book.tick_size)))),
-                            timestamp=t,
-                            validate=validate_orders,
-                        )
-                        repl_price_tick = repl.price_tick
-                        repl_trades = book.add_order(repl)
-                        
-                        # Emit executions
-                        for trade in repl_trades:
-                            t += 1
-                            yield L3Execute(
-                                timestamp=float(t),
-                                maker_id=trade.maker_id,
-                                price_tick=trade.price_tick,
-                                price=book.tick_to_price(trade.price_tick),
-                                quantity=trade.quantity,
-                                aggressor_side=repl.side.value,
-                            )
-                        
-                        # Emit L3Add only if order was posted to book
-                        if repl.quantity > 0:
-                            t += 1
-                            yield L3Add(
-                                timestamp=float(t),
-                                order_id=repl.id,
-                                side=repl.side.value,
-                                price_tick=repl_price_tick,
-                                price=book.tick_to_price(repl_price_tick),
-                                quantity=repl.quantity,
-                            )
+                    msg, t = try_cancel_owned(book, agents, mid_tick, rng, t)
+                    if msg:
+                        yield msg
 
-            next_id += 1
-            
-            # Store original values before add_order modifies them
-            original_qty = order.quantity
-            original_price_tick = order.price_tick
-            
-            # Execute order - for LIMIT orders, remaining qty is posted to book
-            trades = book.add_order(order)
-            
-            # Emit executions first
-            for trade in trades:
-                t += 1
-                yield L3Execute(
-                    timestamp=float(t),
-                    maker_id=trade.maker_id,
-                    price_tick=trade.price_tick,
-                    price=book.tick_to_price(trade.price_tick),
-                    quantity=trade.quantity,
-                    aggressor_side=order.side.value,
+                # build order
+                order = make_random_order(
+                    rng, next_id, side, is_market,
+                    mid_price, cfg.spread, spread_mult,
+                    min_price, min_tick, book, t,
+                    validate=cfg.validate_orders,
                 )
-            
-            # Emit L3Add only if LIMIT order was posted to book (remaining_qty > 0)
-            if order.type == OrderType.LIMIT and order.quantity > 0:
-                t += 1
-                yield L3Add(
-                    timestamp=float(t),
-                    order_id=order.id,
-                    side=order.side.value,
-                    price_tick=original_price_tick,
-                    price=book.tick_to_price(original_price_tick),
-                    quantity=order.quantity,
-                )
+                next_id += 1
 
-        if sleep_sec > 0:
-            time.sleep(sleep_sec)
+                # replenish if limit
+                if not is_market and cfg.replenish:
+                    owner = rng.choice(agents)
+                    for msg, t, next_id in replenish_book(
+                        book, mid_price, cfg.spread, spread_mult,
+                        next_id, min_tick, rng, t,
+                        validate=cfg.validate_orders,
+                        owner_agent=owner,
+                    ):
+                        yield msg
 
+                # submit order
+                for msg, t in emit_order(book, order, t):
+                    yield msg
+                # assign ownership to a random agent if order rested
+                if order.id in book.order_index:
+                    rng.choice(agents).on_order_placed(order.id)
+
+            if cfg.sleep_sec > 0:
+                time.sleep(cfg.sleep_sec)
+
+        # ============ End of trading day ============
+        day += 1
+        if cfg.num_days is not None and day >= cfg.num_days:
+            return
+
+        # overnight
+        clear_book(book)
+        for a in agents:
+            a.clear()
+        mid_price = overnight_gap(rng, mid_price, cfg.overnight_gap_sigma)
+        mid_price = max(min_price, mid_price)
+        anchor_price = daily_drift(rng, anchor_price, cfg.daily_drift_sigma)
+        anchor_price = max(min_price, anchor_price)
+        momentum *= 0.3
+        regime = "normal"
+
+
+# ------------------------------------------------------------------
+# Batch wrapper
+# ------------------------------------------------------------------
 
 def stream_fake_market_batch(
     book: Orderbook,
     batch_size: int = 100,
     **kwargs,
 ) -> Iterator[list[L3Add | L3Execute | L3Cancel]]:
-    """Yield ITCH L3 messages in batches for higher throughput."""
-    generator = stream_fake_market(book, **kwargs)
+    """Yield L3 messages in batches for higher throughput."""
+    gen = stream_fake_market(book, **kwargs)
     while True:
         batch: list[L3Add | L3Execute | L3Cancel] = []
         for _ in range(batch_size):
-            batch.append(next(generator))
+            batch.append(next(gen))
         yield batch
-
-
-def main() -> None:
-    """Simple test of the market stream."""
-    from core import Orderbook
-    book = Orderbook()
-
-    for order, trades in stream_fake_market(book):
-        print("EVENT:", asdict(order) if hasattr(order, '__dataclass_fields__') else order)
-        for tr in trades:
-            print("TRADE:", asdict(tr))
-
-
-if __name__ == "__main__":
-    main()

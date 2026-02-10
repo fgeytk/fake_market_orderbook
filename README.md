@@ -124,6 +124,45 @@ Other runtime parameters are CLI options:
 - `main.py stream --steps --sleep-sec`
 - `main.py profile --steps --sleep-sec`
 
+## Market Presets
+
+The simulation supports multiple market types via CLI presets:
+
+- `us_equity` (SPY-like, liquid US stock)
+- `us_smallcap` (illiquid US small cap)
+- `crypto_liquid` (BTC-like, highly liquid)
+- `crypto_alt` (SOL-like, altcoin)
+- `crypto_memecoin` (extreme volatility)
+- `forex_major` (EUR/USD)
+- `commodity_oil` (WTI crude)
+- `default` (generic)
+
+### List available presets
+
+```bash
+python cli.py presets
+```
+
+### Run simulation with a preset
+
+```bash
+python cli.py stream --market crypto_liquid --steps 100
+```
+
+### Launch WebSocket server with a preset
+
+```bash
+python cli.py ws --market us_equity --port 8000
+```
+
+### Profile a preset
+
+```bash
+python cli.py profile --market forex_major --steps 2000
+```
+
+You can override parameters (e.g. `--seed`, `--num_days`, `--sleep_sec`) for all commands.
+
 ## Architecture
 
 ### Data Flow

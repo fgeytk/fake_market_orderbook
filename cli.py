@@ -40,11 +40,10 @@ def stream(
     generator = stream_fake_market(book, sleep_sec=sleep_sec)
 
     for i in range(steps):
-        event, trades = next(generator)
+        msg = next(generator)
         print({
             "index": i,
-            "event": _to_primitive(event),
-            "trades": _to_primitive(trades),
+            "event": _to_primitive(msg),
         })
 
 
