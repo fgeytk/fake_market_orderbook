@@ -1,203 +1,135 @@
 # Orderbook Trading Simulation
 
-A realistic limit orderbook implementation with tick-based pricing, regime-based market simulation, and interactive visualization.
+A realistic limit orderbook with tick-based pricing, regime-driven market simulation, and live visualization.
 
-## Project Structure
+**Highlights**
+- Tick-based LOB with price-time priority and cancel-by-id support.
+- ITCH-like L3 message objects (ADD, EXECUTE, CANCEL).
+- Market simulation with regime switching and intraday activity/volatility curves.
+- Agent-based flow (market maker, momentum, mean reversion, noise).
+- WebSocket backend streaming MessagePack orderbook snapshots.
+- Two UIs: legacy vanilla JS at `/ui`, modern React + Vite in `visualization/frontend`.
+- Pytest + Hypothesis property tests.
 
+**Project Structure**
 ```
 IA/
-├── core/                      # Core orderbook engine
-│   ├── __init__.py
-│   ├── config.py             # Configuration constants (TICK_SIZE, DEBUG)
-│   ├── models.py             # Data models (Order, Trade, CancelEvent, Side, OrderType)
-│   └── orderbook.py          # Orderbook class with matching engine
-│
-├── simulation/               # Market simulation
-│   ├── __init__.py
-│   ├── agents.py             # Agent behaviors
-│   └── market_stream.py      # Realistic market data generator
-│   └── stochastic.py         # Mid-price evolution
-│
-├── visualization/            # Interactive UI
-│   ├── __init__.py
-│   ├── ws_server.py          # FastAPI + WebSocket backend
-│   └── web/                  # HTML/CSS/JS front-end
-│
-├── tests/                     # Pytest suite
-│   ├── conftest.py
-│   ├── test_agents.py
-│   ├── test_integration_market_stream.py
-│   ├── test_invariants_property.py
-│   ├── test_models.py
-│   └── test_orderbook.py
-│
-├── cli.py                     # Typer CLI commands (viz/stream/profile)
-├── main.py                   # Entry point
-├── requirements.txt          # Python dependencies
-└── README.md                 # This file
+|-- core/
+|   |-- config.py
+|   |-- models.py
+|   |-- orderbook.py
+|   `-- __init__.py
+|-- simulation/
+|   |-- config.py
+|   |-- market_stream.py
+|   |-- order_flow.py
+|   |-- book_ops.py
+|   |-- agents.py
+|   |-- stochastic.py
+|   `-- __init__.py
+|-- visualization/
+|   |-- ws_server.py
+|   |-- web/                  # vanilla JS UI served at /ui
+|   |-- frontend/             # React + Vite UI
+|   `-- QUICKSTART.md
+|-- tests/
+|   |-- conftest.py
+|   |-- test_orderbook.py
+|   |-- test_models.py
+|   |-- test_agents.py
+|   |-- test_integration_market_stream.py
+|   `-- test_invariants_property.py
+|-- legacy/                   # old backups
+|-- cli.py
+|-- main.py
+|-- requirements.txt
+|-- start-backend.ps1
+|-- start-frontend.ps1
+|-- clean_caches.ps1
+|-- watch_itch.py
+|-- test_ws_itch.py
+`-- README.md
 ```
 
-## Features
-
-### Core Orderbook Dummy
+**Setup**
 ```bash
-# Create virtual environment
 python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # Linux/Mac
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Usage
-
-### Run Web UI (FastAPI + WebSocket)
-
+**Quickstart**
+- Backend (FastAPI + WebSocket):
 ```bash
 python main.py ws --host 127.0.0.1 --port 8000
+# or on Windows
+.\start-backend.ps1
+```
+- Frontend (React dev server):
+```bash
+.\start-frontend.ps1
+# or manually
+cd visualization/frontend
+npm install
+npm run dev
 ```
 
-Then open http://127.0.0.1:8000/ui in your browser.
+Open `http://localhost:3000` for the React UI.
+Open `http://localhost:8000/ui` for the legacy UI.
 
-Adjust streaming speed:
+If you run `npm run build`, the React app is built into `visualization/frontend/dist` and will be served by FastAPI at `http://localhost:8000/` when that folder exists.
 
+**CLI Usage**
 ```bash
-python main.py ws --fps 30 --batch-size 100
-```
+# Stream a short run to stdout
+python main.py stream --steps 20 --sleep-sec 0.0
 
-### Run a Short Stream
+# Profile the generator
+python main.py profile --steps 2000
 
-```bash
-python main.py stream --steps 20
-```
-
-### CLI Help
-
-```bash
+# Help
 python main.py --help
 ```
 
-### Tests (pytest)
+**WebSocket Protocol**
+- Endpoint: `ws://localhost:8000/ws`
+- Payload fields: `ts`, `seq`, `bids`, `asks`
+- `bids` and `asks` are lists of `[price, size]` (best first)
 
-```bash
-# Run all tests
-python -m pytest -q
+The WebSocket feed is snapshots, not L3 messages. If you need raw L3 events, use `simulation.stream_fake_market` directly.
 
-# Run a single test file
-python -m pytest tests/test_orderbook.py -q
-```
+Note: `watch_itch.py` and `test_ws_itch.py` expect JSON batches from an older feed and do not match the current MessagePack snapshot protocol.
 
-Notes:
-- Les tests unitaires sont dans tests/.
-- Hypothesis est utilisé pour les tests d'invariants (test_invariants_property.py).
-
-### Use as Library
-
+**Library Usage**
 ```python
-from core import Orderbook, Order, OrderType, Side
-from simulation import stream_fake_market
+from core import Orderbook
+from simulation import SimulationConfig, stream_fake_market
 
-# Create orderbook
 book = Orderbook()
+cfg = SimulationConfig(seed=123, orders_per_tick=5, cancel_ratio=0.2)
+gen = stream_fake_market(book, cfg)
 
-# Generate market events
-for event, trades in stream_fake_market(book):
-    print(f"Event: {event}")
-    for trade in trades:
-        print(f"  Trade: {trade}")
-    
-    # Check best prices
-    best_bid = book.best_bid()  # (price_tick, quantity)
-    best_ask = book.best_ask()
+msg = next(gen)  # L3Add | L3Execute | L3Cancel
+print(msg)
 ```
 
-## Configuration
+You can also override config fields directly:
+```python
+gen = stream_fake_market(book, seed=123, orders_per_tick=5, cancel_ratio=0.2)
+```
 
-Edit [core/config.py](core/config.py) to change:
-- `TICK_SIZE`: Price discretization (default: 0.01)
-- `DEBUG`: Enable invariant checks (default: False)
-- `VALIDATE_ORDERS`: Validate orders on creation (default: False)
+**Configuration**
+- `core/config.py` contains `TICK_SIZE`, `DEBUG`, `VALIDATE_ORDERS`
+- `simulation/config.py` (`SimulationConfig`) contains price/spread, order flow ratios, agent seeding, regime switching, multi-day session settings, and performance controls
 
-Other runtime parameters are CLI options:
-- `main.py ws --host --port`
-- `main.py stream --steps --sleep-sec`
-- `main.py profile --steps --sleep-sec`
-
-## Market Presets
-
-The simulation supports multiple market types via CLI presets:
-
-- `us_equity` (SPY-like, liquid US stock)
-- `us_smallcap` (illiquid US small cap)
-- `crypto_liquid` (BTC-like, highly liquid)
-- `crypto_alt` (SOL-like, altcoin)
-- `crypto_memecoin` (extreme volatility)
-- `forex_major` (EUR/USD)
-- `commodity_oil` (WTI crude)
-- `default` (generic)
-
-### List available presets
-
+**Tests**
 ```bash
-python cli.py presets
+python -m pytest -q
 ```
 
-### Run simulation with a preset
-
-```bash
-python cli.py stream --market crypto_liquid --steps 100
-```
-
-### Launch WebSocket server with a preset
-
-```bash
-python cli.py ws --market us_equity --port 8000
-```
-
-### Profile a preset
-
-```bash
-python cli.py profile --market forex_major --steps 2000
-```
-
-You can override parameters (e.g. `--seed`, `--num_days`, `--sleep_sec`) for all commands.
-
-## Architecture
-
-### Data Flow
-
-```
-market_stream.py
-    ↓ generates
-(Order/CancelEvent)
-    ↓ processed by
-Orderbook.add_order()
-    ↓ produces
-   Trades
-    ↓ consumed by
-cli.py stream (prints)
-FastAPI WS + web UI (visualization)
-```
-
-### Simple(dumb) Orderbook
-
-### Old Files (Backup)
-Legacy files are kept in legacy/:
-- `main_old.py`
-- `market_stream_old.py`
-- `orderbook_viz_old.py`
-- `orderbook_viz_dash.py`
-
-These can be safely deleted once you confirm the new structure works.
-
-### Running Individual Modules
-
-```bash
-# Test market stream
-python -m simulation.market_stream
-```
-
-## License
-
-MIT License - Feel free to use and modify!
+**License**
+MIT

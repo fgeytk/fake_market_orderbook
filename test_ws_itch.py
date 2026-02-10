@@ -1,4 +1,12 @@
 """Test WebSocket ITCH L3 feed."""
+if __name__ != "__main__":
+    import pytest
+
+    pytest.skip(
+        "Manual integration test. Run directly: python test_ws_itch.py",
+        allow_module_level=True,
+    )
+
 import asyncio
 import json
 import websockets
